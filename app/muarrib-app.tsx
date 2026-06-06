@@ -98,7 +98,7 @@ async function callProxy(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-user-api-key': apiKey,
+      'x-user-api-key': apiKey.trim(),
     },
     body: JSON.stringify({ imageBase64, pageNum, provider }),
   });

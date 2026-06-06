@@ -67,6 +67,21 @@ async function translateWithRetry(
   }
 }
 
+function friendlyError(err: unknown): string {
+  if (!(err instanceof Error)) return 'Translation failed';
+  const m = err.message;
+  if (m.includes('[401') || m.includes('401 Unauthorized') || m.includes('ACCESS_TOKEN_TYPE_UNSUPPORTED')) {
+    return 'Invalid API key — make sure you pasted a Gemini API key (starts with "AIza"), not an OAuth token or password. Check for extra spaces or newlines.';
+  }
+  if (m.includes('[403') || m.includes('403 Forbidden')) {
+    return 'Access denied — your key may not be enabled for this model. Check your Google AI Studio or Anthropic Console plan.';
+  }
+  if (m.includes('[429') || m.includes('429 Too Many Requests')) {
+    return 'Rate limit hit — the free Gemini tier allows 5 requests/minute. Wait a moment, then use "Retry this page".';
+  }
+  return m;
+}
+
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
   try {
@@ -90,12 +105,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const apiKey =
+  const apiKey = (
     req.headers.get('x-user-api-key') ||
     (provider === 'anthropic'
       ? process.env.ANTHROPIC_API_KEY
       : process.env.GEMINI_API_KEY) ||
-    '';
+    ''
+  ).trim();
 
   if (!apiKey) {
     return NextResponse.json(
@@ -113,7 +129,6 @@ export async function POST(req: NextRequest) {
     );
     return NextResponse.json({ blocks, truncated });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Translation failed';
-    return NextResponse.json({ error: message }, { status: 502 });
+    return NextResponse.json({ error: friendlyError(err) }, { status: 502 });
   }
 }

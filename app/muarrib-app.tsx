@@ -87,6 +87,7 @@ async function splitImageVertically(dataUrl: string): Promise<[string, string]> 
 }
 
 // ─── Utility: call the backend proxy
+// apiKey is empty when using the server's key (default/free mode).
 async function callProxy(
   dataUrl: string,
   pageNum: number,
@@ -94,15 +95,20 @@ async function callProxy(
   apiKey: string,
 ): Promise<{ blocks: Block[]; truncated: boolean }> {
   const imageBase64 = dataUrl.split(',')[1];
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['x-user-api-key'] = apiKey;
   const res = await fetch('/api/translate-page', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-api-key': apiKey.trim(),
-    },
+    headers,
     body: JSON.stringify({ imageBase64, pageNum, provider }),
   });
-  const data: { blocks?: Block[]; error?: string; truncated?: boolean } = await res.json();
+  const data: { blocks?: Block[]; error?: string; truncated?: boolean; rateLimited?: boolean } =
+    await res.json();
+  if (data.rateLimited) {
+    const e = new Error(data.error ?? 'Daily page limit reached');
+    (e as Error & { rateLimited: boolean }).rateLimited = true;
+    throw e;
+  }
   if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`);
   return { blocks: data.blocks ?? [], truncated: data.truncated ?? false };
 }
@@ -129,6 +135,7 @@ async function processOnePage(
   apiKey: string,
   imageCache: Map<number, string>,
   onUpdate: (num: number, patch: Partial<PageState>) => void,
+  onRateLimit?: () => void,
 ): Promise<void> {
   try {
     let image = imageCache.get(num) ?? null;
@@ -156,6 +163,7 @@ async function processOnePage(
       onUpdate(num, { status: 'done', blocks, error: null });
     }
   } catch (err) {
+    if ((err as { rateLimited?: boolean }).rateLimited) onRateLimit?.();
     onUpdate(num, {
       status: 'failed',
       error: err instanceof Error ? err.message : String(err),
@@ -309,9 +317,11 @@ export default function MuarribApp() {
   const [showOriginal, setShowOriginal] = useState(false);
   const [label, setLabel] = useState<{ fileName: string; from: number; to: number } | null>(null);
 
-  // Provider / key state
-  const [provider, setProvider] = useState<Provider>('gemini');
-  const [apiKey, setApiKey] = useState('');
+  // Advanced / BYOK state (collapsed by default — default mode needs no key)
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [byokProvider, setByokProvider] = useState<Provider>('gemini');
+  const [byokKey, setByokKey] = useState('');
+  const [rateLimitHit, setRateLimitHit] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageCache = useRef<Map<number, string>>(new Map());
@@ -375,7 +385,11 @@ export default function MuarribApp() {
 
   // ─── Translation
   const run = useCallback(async () => {
-    if (running || !pdfDoc || !apiKey) return;
+    if (running || !pdfDoc) return;
+    const usByok = byokKey.trim().length > 0;
+    const prov: Provider = usByok ? byokProvider : 'anthropic';
+    const key = usByok ? byokKey.trim() : '';
+    setRateLimitHit(false);
     const { from, to, count } = clamp();
     const nums = Array.from({ length: count }, (_, i) => from + i);
 
@@ -386,21 +400,25 @@ export default function MuarribApp() {
     setLabel({ fileName, from, to });
 
     const doc = pdfDoc;
-    const prov = provider;
-    const key = apiKey;
     const cache = imageCache.current;
 
-    await runPool(nums, CONCURRENCY, num => processOnePage(num, doc, prov, key, cache, updatePage));
+    await runPool(nums, CONCURRENCY, num =>
+      processOnePage(num, doc, prov, key, cache, updatePage, () => setRateLimitHit(true)),
+    );
     setRunning(false);
-  }, [running, pdfDoc, apiKey, provider, fileName, clamp, updatePage]);
+  }, [running, pdfDoc, byokKey, byokProvider, fileName, clamp, updatePage]);
 
   const retryPage = useCallback(async (num: number) => {
-    if (!pdfDoc || !apiKey) return;
+    if (!pdfDoc) return;
+    const usByok = byokKey.trim().length > 0;
+    const prov: Provider = usByok ? byokProvider : 'anthropic';
+    const key = usByok ? byokKey.trim() : '';
     updatePage(num, { status: 'pending', error: null });
-    await processOnePage(num, pdfDoc, provider, apiKey, imageCache.current, updatePage);
-  }, [pdfDoc, provider, apiKey, updatePage]);
+    await processOnePage(num, pdfDoc, prov, key, imageCache.current, updatePage, () => setRateLimitHit(true));
+  }, [pdfDoc, byokKey, byokProvider, updatePage]);
 
   // ─── Derived
+  const usingByok = byokKey.trim().length > 0;
   const range = clamp();
   const finished = pages.filter(p => p.status === 'done' || p.status === 'failed').length;
   const failed = pages.filter(p => p.status === 'failed').length;
@@ -446,109 +464,6 @@ export default function MuarribApp() {
             ))}
           </div>
         </header>
-
-        {/* ── Provider + Key ── */}
-        <div className="provider-card">
-          <div className="provider-head">AI Provider &amp; API Key</div>
-
-          <div className="provider-row">
-            <label className="provider-label">
-              <input
-                type="radio"
-                name="provider"
-                value="gemini"
-                checked={provider === 'gemini'}
-                onChange={() => setProvider('gemini')}
-                disabled={running}
-              />
-              <div>
-                <div className="prov-name">Gemini — free, just a Google account</div>
-                <div className="prov-note">
-                  Google&apos;s vision model. Get a key in 30 seconds from Google AI Studio — no credit card required.
-                </div>
-              </div>
-            </label>
-            {provider === 'gemini' && (
-              <div className="key-expand">
-                <div className="key-row">
-                  <input
-                    type="password"
-                    className="key-input"
-                    placeholder="Paste your Gemini API key (AIza…)"
-                    value={apiKey}
-                    onChange={e => setApiKey(e.target.value)}
-                    disabled={running}
-                    autoComplete="off"
-                  />
-                  <a
-                    className="key-link"
-                    href="https://aistudio.google.com/apikey"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Get a free key →
-                  </a>
-                </div>
-                <div className="warn-note">
-                  The free Gemini tier may use your prompts to improve Google&apos;s models.
-                  <strong> Do not use it for confidential or patient documents.</strong> Use Anthropic for those.
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="provider-row">
-            <label className="provider-label">
-              <input
-                type="radio"
-                name="provider"
-                value="anthropic"
-                checked={provider === 'anthropic'}
-                onChange={() => setProvider('anthropic')}
-                disabled={running}
-              />
-              <div>
-                <div className="prov-name">Anthropic — higher quality, paid tiers not used for training</div>
-                <div className="prov-note">
-                  Claude vision. Suitable for medical, legal, and research documents.
-                </div>
-              </div>
-            </label>
-            {provider === 'anthropic' && (
-              <div className="key-expand">
-                <div className="key-row">
-                  <input
-                    type="password"
-                    className="key-input"
-                    placeholder="Paste your Anthropic API key (sk-ant-…)"
-                    value={apiKey}
-                    onChange={e => setApiKey(e.target.value)}
-                    disabled={running}
-                    autoComplete="off"
-                  />
-                  <a
-                    className="key-link"
-                    href="https://console.anthropic.com/settings/keys"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Get a key →
-                  </a>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* ── Privacy note ── */}
-        <p className="privacy-note">
-          <b>Privacy:</b> Your PDF never leaves your browser as a file. Only individual page <b>images</b> are
-          sent to the AI provider you choose, only to be translated. Muʿarrib stores nothing and logs nothing.
-          Your key is sent with each request and never stored on our servers.
-          Note: your chosen provider processes the images under its own terms —
-          the <b>free Gemini tier may use them to improve Google&apos;s models</b>,
-          so for confidential or patient documents use <b>Anthropic</b>.
-        </p>
 
         {/* ── Uploader ── */}
         <div
@@ -639,12 +554,137 @@ export default function MuarribApp() {
             <button
               className="btn primary"
               onClick={run}
-              disabled={running || !apiKey.trim() || !pdfDoc}
+              disabled={running || !pdfDoc}
             >
               {running ? 'Translating…' : 'Translate to Arabic'}
             </button>
           </div>
         </div>
+
+        {/* ── Rate-limit banner ── */}
+        {rateLimitHit && !usingByok && (
+          <div className="rate-limit-banner">
+            <b>Free daily limit reached.</b> You&apos;ve translated {30} pages today on the shared key.{' '}
+            <button
+              className="link-btn"
+              onClick={() => { setAdvancedOpen(true); }}
+            >
+              Add your own API key
+            </button>{' '}
+            in Advanced Settings below to keep going, or come back tomorrow.
+          </div>
+        )}
+
+        {/* ── Advanced: BYOK ── */}
+        <div className="advanced-section">
+          <button
+            className="advanced-toggle"
+            onClick={() => setAdvancedOpen(v => !v)}
+            aria-expanded={advancedOpen}
+            disabled={running}
+          >
+            <span className="adv-arrow">{advancedOpen ? '▲' : '▼'}</span>
+            Advanced — use your own API key
+          </button>
+          {advancedOpen && (
+            <div className="advanced-content">
+              <p className="adv-note">
+                Your key is sent per-request and never stored on our servers.
+                Using your own key bypasses the daily free-page limit and lets you choose your AI provider.
+              </p>
+              <div className="adv-providers">
+                <div className="provider-row">
+                  <label className="provider-label">
+                    <input
+                      type="radio"
+                      name="byok-provider"
+                      value="gemini"
+                      checked={byokProvider === 'gemini'}
+                      onChange={() => setByokProvider('gemini')}
+                      disabled={running}
+                    />
+                    <div>
+                      <div className="prov-name">Gemini — free, just a Google account</div>
+                      <div className="prov-note">No credit card required. Get a key in 30 seconds.</div>
+                    </div>
+                  </label>
+                  {byokProvider === 'gemini' && (
+                    <div className="key-expand">
+                      <div className="key-row">
+                        <input
+                          type="password"
+                          className="key-input"
+                          placeholder="Paste your Gemini API key (AIza…)"
+                          value={byokKey}
+                          onChange={e => setByokKey(e.target.value)}
+                          disabled={running}
+                          autoComplete="off"
+                        />
+                        <a className="key-link" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">
+                          Get a free key →
+                        </a>
+                      </div>
+                      <div className="warn-note">
+                        The free Gemini tier may use your prompts to improve Google&apos;s models.
+                        <strong> Not for confidential or patient documents.</strong>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="provider-row">
+                  <label className="provider-label">
+                    <input
+                      type="radio"
+                      name="byok-provider"
+                      value="anthropic"
+                      checked={byokProvider === 'anthropic'}
+                      onChange={() => setByokProvider('anthropic')}
+                      disabled={running}
+                    />
+                    <div>
+                      <div className="prov-name">Anthropic — Claude, not used for training</div>
+                      <div className="prov-note">Best for medical, legal, and research documents.</div>
+                    </div>
+                  </label>
+                  {byokProvider === 'anthropic' && (
+                    <div className="key-expand">
+                      <div className="key-row">
+                        <input
+                          type="password"
+                          className="key-input"
+                          placeholder="Paste your Anthropic API key (sk-ant-…)"
+                          value={byokKey}
+                          onChange={e => setByokKey(e.target.value)}
+                          disabled={running}
+                          autoComplete="off"
+                        />
+                        <a className="key-link" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">
+                          Get a key →
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              {usingByok && (
+                <div className="adv-active-note">
+                  Using your {byokProvider === 'gemini' ? 'Gemini' : 'Anthropic'} key · daily limit bypassed.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── Privacy note ── */}
+        <p className="privacy-note">
+          <b>Privacy:</b> Your PDF never leaves your browser as a file. Only individual page <b>images</b> are
+          sent to the AI, only to be translated. Nothing is stored or logged on our servers.
+          {usingByok && byokProvider === 'gemini' ? (
+            <> When using your Gemini key, the <b>free tier may use images to improve Google&apos;s models</b> — not for confidential documents.</>
+          ) : (
+            <> The default free tier uses Claude (Anthropic) — paid tiers are not used for model training, making it suitable for medical, legal, and research documents.</>
+          )}
+        </p>
 
         {/* ── Progress ── */}
         <div className={`progress-wrap${pages.length > 0 ? ' show' : ''}`}>

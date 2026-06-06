@@ -68,6 +68,24 @@ header{padding:40px 0 26px;border-bottom:1px solid var(--rule);margin-bottom:34p
 .privacy-note{margin-bottom:20px;font-family:var(--ui);font-size:12.5px;color:var(--ink-soft);line-height:1.55;background:var(--card);border:1px solid var(--rule-soft);border-radius:10px;padding:12px 16px;}
 .privacy-note b{color:var(--ink)}
 
+/* Advanced / BYOK section */
+.advanced-section{margin-top:16px;border:1px solid var(--rule);border-radius:var(--radius);overflow:hidden;background:var(--card);}
+.advanced-toggle{width:100%;background:none;border:none;padding:14px 20px;text-align:left;font-family:var(--ui);font-size:13.5px;font-weight:600;color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;gap:10px;transition:color .15s,background .15s;}
+.advanced-toggle:hover:not(:disabled){color:var(--accent-ink);background:var(--accent-wash)}
+.advanced-toggle:disabled{cursor:not-allowed;opacity:.5}
+.adv-arrow{font-size:11px;color:var(--ink-faint);flex:none}
+.advanced-content{border-top:1px solid var(--rule-soft);padding:4px 0 0;}
+.adv-note{font-family:var(--ui);font-size:12.5px;color:var(--ink-soft);margin:12px 20px 4px;line-height:1.55;}
+.adv-providers .provider-row{border-bottom:1px solid var(--rule-soft);}
+.adv-providers .provider-row:last-child{border-bottom:none;}
+.adv-active-note{font-family:var(--ui);font-size:12.5px;font-weight:600;color:var(--accent);background:var(--accent-wash);margin:10px 20px 16px;padding:9px 14px;border-radius:9px;border:1px solid var(--rule-soft);}
+
+/* Rate-limit banner */
+.rate-limit-banner{margin-top:16px;font-family:var(--ui);font-size:13.5px;color:var(--amber);background:var(--amber-wash);border:1px solid #e2b570;border-radius:var(--radius);padding:14px 18px;line-height:1.5;}
+.rate-limit-banner b{color:var(--amber)}
+.link-btn{background:none;border:none;padding:0;font:inherit;font-weight:700;color:var(--accent);cursor:pointer;text-decoration:underline;}
+.link-btn:hover{color:var(--accent-ink)}
+
 /* Uploader */
 .uploader{border:1.5px dashed var(--rule);border-radius:var(--radius);background:linear-gradient(180deg,var(--card),#f7f1e6);padding:48px 28px;text-align:center;transition:border-color .2s,background .2s,transform .15s;cursor:pointer;}
 .uploader:hover{border-color:var(--accent);background:linear-gradient(180deg,#fbf7ee,#f4ede0)}
@@ -178,6 +196,7 @@ footer b{color:var(--ink-soft)}
   @page{margin:18mm 16mm}
   body{background:#fff;background-image:none}
   header,.uploader,.controls,.progress-wrap,.results-bar,.provider-card,.privacy-note,
+  .advanced-section,.rate-limit-banner,
   .page-tag,.col-label,.card-orig,.b-figure .hint,footer{display:none !important}
   .results.with-original .card-grid{display:block}
   .page-card{border:none;padding:0;opacity:1;transform:none;animation:none}

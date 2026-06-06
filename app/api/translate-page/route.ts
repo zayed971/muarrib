@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { callAnthropic } from '@/lib/providers/anthropic';
 import { callGemini } from '@/lib/providers/gemini';
+import { checkAndIncrement, DAILY_PAGE_CAP } from '@/lib/ratelimit';
 import type { Block, Provider } from '@/lib/types';
 
 // Hobby plan cap: 60 s. With Fluid Compute enabled, raise to 300.
@@ -106,19 +107,36 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const apiKey = (
-      req.headers.get('x-user-api-key') ||
-      (provider === 'anthropic'
-        ? process.env.ANTHROPIC_API_KEY
-        : process.env.GEMINI_API_KEY) ||
-      ''
-    ).trim();
+    const userKeyHeader = req.headers.get('x-user-api-key')?.trim() ?? '';
+    const isByok = userKeyHeader.length > 0;
+    const apiKey = isByok
+      ? userKeyHeader
+      : (provider === 'anthropic'
+          ? process.env.ANTHROPIC_API_KEY
+          : process.env.GEMINI_API_KEY
+        )?.trim() ?? '';
 
     if (!apiKey) {
       return NextResponse.json(
-        { error: 'No API key — supply one via the x-user-api-key header' },
+        { error: 'No API key configured. Add your own key in the Advanced section, or ask the site owner to set ANTHROPIC_API_KEY.' },
         { status: 401 }
       );
+    }
+
+    if (!isByok) {
+      const ip =
+        req.headers.get('x-forwarded-for')?.split(',')[0].trim() ??
+        'unknown';
+      const { allowed } = checkAndIncrement(ip);
+      if (!allowed) {
+        return NextResponse.json(
+          {
+            error: `You've used all ${DAILY_PAGE_CAP} free pages for today. Add your own API key in the Advanced section to keep translating, or come back tomorrow.`,
+            rateLimited: true,
+          },
+          { status: 429 },
+        );
+      }
     }
 
     const { blocks, truncated } = await translateWithRetry(

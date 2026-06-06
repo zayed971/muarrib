@@ -33,8 +33,8 @@ interface PageState {
 
 // ─── Constants
 const CONCURRENCY = 3;
-const TARGET_LONG_EDGE = 1600;
-const JPEG_QUALITY = 0.82;
+const TARGET_LONG_EDGE = 1300;
+const JPEG_QUALITY = 0.8;
 const WARN_ABOVE = 40;
 const PDF_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
 const PDF_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';

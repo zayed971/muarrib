@@ -3,7 +3,7 @@ import { callAnthropic } from '@/lib/providers/anthropic';
 import { callGemini } from '@/lib/providers/gemini';
 import type { Block, Provider } from '@/lib/types';
 
-// Vercel: allow up to 60 s per translation call (Hobby plan max)
+// Hobby plan cap: 60 s. With Fluid Compute enabled, raise to 300.
 export const maxDuration = 60;
 
 const VALID_BLOCK_TYPES = new Set<string>([
@@ -83,44 +83,44 @@ function friendlyError(err: unknown): string {
 }
 
 export async function POST(req: NextRequest) {
-  let body: Record<string, unknown>;
   try {
-    body = (await req.json()) as Record<string, unknown>;
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
-  }
+    let body: Record<string, unknown>;
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
 
-  const { imageBase64, pageNum, provider } = body;
+    const { imageBase64, pageNum, provider } = body;
 
-  if (typeof imageBase64 !== 'string' || !imageBase64) {
-    return NextResponse.json({ error: 'Missing or invalid imageBase64' }, { status: 400 });
-  }
-  if (typeof pageNum !== 'number' || !Number.isInteger(pageNum) || pageNum < 1) {
-    return NextResponse.json({ error: 'Missing or invalid pageNum' }, { status: 400 });
-  }
-  if (provider !== 'anthropic' && provider !== 'gemini') {
-    return NextResponse.json(
-      { error: 'Invalid provider — must be "anthropic" or "gemini"' },
-      { status: 400 }
-    );
-  }
+    if (typeof imageBase64 !== 'string' || !imageBase64) {
+      return NextResponse.json({ error: 'Missing or invalid imageBase64' }, { status: 400 });
+    }
+    if (typeof pageNum !== 'number' || !Number.isInteger(pageNum) || pageNum < 1) {
+      return NextResponse.json({ error: 'Missing or invalid pageNum' }, { status: 400 });
+    }
+    if (provider !== 'anthropic' && provider !== 'gemini') {
+      return NextResponse.json(
+        { error: 'Invalid provider — must be "anthropic" or "gemini"' },
+        { status: 400 }
+      );
+    }
 
-  const apiKey = (
-    req.headers.get('x-user-api-key') ||
-    (provider === 'anthropic'
-      ? process.env.ANTHROPIC_API_KEY
-      : process.env.GEMINI_API_KEY) ||
-    ''
-  ).trim();
+    const apiKey = (
+      req.headers.get('x-user-api-key') ||
+      (provider === 'anthropic'
+        ? process.env.ANTHROPIC_API_KEY
+        : process.env.GEMINI_API_KEY) ||
+      ''
+    ).trim();
 
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: 'No API key — supply one via the x-user-api-key header' },
-      { status: 401 }
-    );
-  }
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: 'No API key — supply one via the x-user-api-key header' },
+        { status: 401 }
+      );
+    }
 
-  try {
     const { blocks, truncated } = await translateWithRetry(
       imageBase64,
       pageNum as number,

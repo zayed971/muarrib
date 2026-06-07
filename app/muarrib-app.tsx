@@ -34,6 +34,10 @@ interface PageState {
 
 // ─── Constants
 const CONCURRENCY = 3;
+// Free Gemini keys are capped at 5 requests/minute — go one at a time, spaced
+// to stay safely under that, instead of bursting and hitting 429s.
+const GEMINI_CONCURRENCY = 1;
+const GEMINI_SPACING_MS = 13_000;
 const TARGET_LONG_EDGE = 1300;
 const JPEG_QUALITY = 0.8;
 const WARN_ABOVE = 40;
@@ -94,7 +98,7 @@ async function callProxy(
   pageNum: number,
   provider: Provider,
   apiKey: string,
-): Promise<{ blocks: Block[]; truncated: boolean }> {
+): Promise<{ blocks: Block[]; truncated: boolean; parseFailed: boolean }> {
   const imageBase64 = dataUrl.split(',')[1];
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiKey) headers['x-user-api-key'] = apiKey;
@@ -103,7 +107,7 @@ async function callProxy(
     headers,
     body: JSON.stringify({ imageBase64, pageNum, provider }),
   });
-  const data: { blocks?: Block[]; error?: string; truncated?: boolean; rateLimited?: boolean } =
+  const data: { blocks?: Block[]; error?: string; truncated?: boolean; parseFailed?: boolean; rateLimited?: boolean } =
     await res.json();
   if (data.rateLimited) {
     const e = new Error(data.error ?? 'Daily page limit reached');
@@ -111,24 +115,31 @@ async function callProxy(
     throw e;
   }
   if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`);
-  return { blocks: data.blocks ?? [], truncated: data.truncated ?? false };
+  return { blocks: data.blocks ?? [], truncated: data.truncated ?? false, parseFailed: data.parseFailed ?? false };
 }
 
-// ─── Utility: bounded concurrency pool
+// ─── Utility: bounded concurrency pool, with optional spacing between calls
+// (used to keep free Gemini keys under their 5 requests/minute cap)
 async function runPool<T>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<void>,
+  spacingMs = 0,
 ): Promise<void> {
   let i = 0;
   await Promise.all(
     Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (i < items.length) await fn(items[i++]);
+      while (i < items.length) {
+        if (i > 0 && spacingMs > 0) await new Promise(r => setTimeout(r, spacingMs));
+        await fn(items[i++]);
+      }
     }),
   );
 }
 
-// ─── Process one page: render image → call proxy → split on truncation → update state
+// ─── Process one page: render image → ONE normal call → only on truncation or
+// a parse failure, retry that page by splitting it into top/bottom halves and
+// merging the resulting blocks in order → update state
 async function processOnePage(
   num: number,
   doc: PdfDocument,
@@ -146,10 +157,11 @@ async function processOnePage(
       onUpdate(num, { image });
     }
 
-    const { blocks, truncated } = await callProxy(image, num, provider, apiKey);
+    const { blocks, truncated, parseFailed } = await callProxy(image, num, provider, apiKey);
 
-    if (truncated) {
-      // Dense page hit the token limit — split into top/bottom halves and merge
+    if (truncated || parseFailed) {
+      // Hit the token limit or returned unparseable JSON — split into top/bottom
+      // halves, translate each separately, and merge in reading order
       const [topUrl, botUrl] = await splitImageVertically(image);
       const [topResult, botResult] = await Promise.all([
         callProxy(topUrl, num, provider, apiKey),
@@ -526,8 +538,14 @@ export default function MuarribApp() {
     const doc = pdfDoc;
     const cache = imageCache.current;
 
-    await runPool(nums, CONCURRENCY, num =>
+    // Server-key/Anthropic mode can run 3 at a time; a free Gemini key is
+    // capped at 5 requests/minute, so go one at a time with ~13s spacing.
+    const limit = prov === 'gemini' ? GEMINI_CONCURRENCY : CONCURRENCY;
+    const spacing = prov === 'gemini' ? GEMINI_SPACING_MS : 0;
+
+    await runPool(nums, limit, num =>
       processOnePage(num, doc, prov, key, cache, updatePage, () => setRateLimitHit(true)),
+      spacing,
     );
     setRunning(false);
   }, [running, pdfDoc, byokKey, byokProvider, keyStatus, fileName, clamp, updatePage]);

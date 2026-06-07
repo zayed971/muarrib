@@ -51,20 +51,21 @@ async function callProvider(
   return callGemini(imageBase64, pageNum, apiKey);
 }
 
-async function translateWithRetry(
+async function translateOnce(
   imageBase64: string,
   pageNum: number,
   provider: Provider,
   apiKey: string,
-): Promise<{ blocks: Block[]; truncated: boolean }> {
+): Promise<{ blocks: Block[]; truncated: boolean; parseFailed: boolean }> {
   const { text, truncated } = await callProvider(imageBase64, pageNum, provider, apiKey);
 
   try {
-    return { blocks: validateBlocks(stripToJsonArray(text)), truncated };
+    return { blocks: validateBlocks(stripToJsonArray(text)), truncated, parseFailed: false };
   } catch {
-    // Repair failed — retry the model call once, then throw if still broken
-    const { text: retryText, truncated: retryTruncated } = await callProvider(imageBase64, pageNum, provider, apiKey);
-    return { blocks: validateBlocks(stripToJsonArray(retryText)), truncated: retryTruncated };
+    // Repair failed — signal it instead of burning another full-page call with the
+    // same image (likely to fail the same way). The client retries by splitting
+    // the page into halves, same as it does for truncation.
+    return { blocks: [], truncated, parseFailed: true };
   }
 }
 
@@ -139,13 +140,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const { blocks, truncated } = await translateWithRetry(
+    const { blocks, truncated, parseFailed } = await translateOnce(
       imageBase64,
       pageNum as number,
       provider as Provider,
       apiKey,
     );
-    return NextResponse.json({ blocks, truncated });
+    return NextResponse.json({ blocks, truncated, parseFailed });
   } catch (err: unknown) {
     return NextResponse.json({ error: friendlyError(err) }, { status: 502 });
   }

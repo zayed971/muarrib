@@ -373,6 +373,8 @@ export default function MuarribApp() {
   const [showEnglish, setShowEnglish] = useState(false);
   const [label, setLabel] = useState<{ fileName: string; from: number; to: number } | null>(null);
 
+  const [aboutOpen, setAboutOpen] = useState(false);
+
   // Advanced / BYOK state (collapsed by default — default mode needs no key)
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [byokProvider, setByokProvider] = useState<Provider>('gemini');
@@ -572,6 +574,9 @@ export default function MuarribApp() {
           <div className="brand">
             <span className="mark">مُعرِّب</span>
             <h1><span className="latin-name">Muʿarrib</span></h1>
+            <button type="button" className="about-link" onClick={() => setAboutOpen(true)}>
+              <span aria-hidden="true">ⓘ</span> About
+            </button>
           </div>
           <p className="tagline">
             English PDFs, read in real Arabic — letters connected, direction correct, tables rebuilt.
@@ -898,19 +903,28 @@ export default function MuarribApp() {
           ))}
         </div>
 
-        {/* ── Footer ── */}
-        <footer>
-          <b>How this works &amp; what to trust.</b>{' '}
-          Each page is rendered to an image and read by a vision model — so corrupted PDF text encoding never
-          enters the pipeline. Output is a clean <b>reflowed reading view</b>, not a pixel copy.
-          Tables are rebuilt as Arabic tables.{' '}
-          <b>Figures and charts are described in Arabic; the real graphic is shown under &quot;Show original&quot;</b> —
-          the tool never redraws a chart or invents data.
-          Numbers, dosages, units and statistics are transcribed exactly; anything blurry or uncertain is
-          marked <span style={{ color: 'var(--amber)' }}>غير مؤكد</span> so you can check it against the source.
-          For medical, legal, or research use, <b>verify flagged passages and key figures against the original.</b>
-        </footer>
       </div>
+
+      {aboutOpen && (
+        <div className="about-overlay" onClick={() => setAboutOpen(false)}>
+          <div className="about-panel" onClick={e => e.stopPropagation()}>
+            <button type="button" className="about-close" onClick={() => setAboutOpen(false)} aria-label="Close">×</button>
+            <h2>About Muʿarrib</h2>
+            <p>
+              Each page is rendered to an image and read by a vision model — so corrupted PDF text
+              encoding never enters the pipeline. Output is a clean reflowed reading view: tables
+              rebuilt in Arabic, figures described with the original graphic shown under
+              &quot;Show original&quot;, and anything blurry or uncertain marked{' '}
+              <span style={{ color: 'var(--amber)' }}>غير مؤكد</span> so you can check it against the source.
+            </p>
+            <p>
+              <b>Privacy:</b> Your PDF never leaves your browser as a file — only individual page
+              images are sent to the AI you choose, only to be translated, and nothing is stored or
+              logged on our servers.
+            </p>
+          </div>
+        </div>
+      )}
     </>
   );
 }

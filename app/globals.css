@@ -188,8 +188,17 @@ header{padding:40px 0 26px;border-bottom:1px solid var(--rule);margin-bottom:34p
 .skeleton{height:120px;border-radius:10px;background:linear-gradient(100deg,var(--rule-soft) 30%,#f1e8d6 50%,var(--rule-soft) 70%);background-size:200% 100%;animation:shimmer 1.4s infinite}
 @keyframes shimmer{to{background-position:-200% 0}}
 
-footer{margin:60px 0 50px;padding-top:22px;border-top:1px solid var(--rule);color:var(--ink-faint);font-family:var(--ui);font-size:12.5px;line-height:1.7;max-width:78ch;}
-footer b{color:var(--ink-soft)}
+.about-link{display:inline-flex;align-items:center;gap:5px;font-family:var(--ui);font-size:12.5px;color:var(--ink-faint);background:none;border:1px solid var(--rule);border-radius:999px;padding:5px 13px;cursor:pointer;transition:color .15s,border-color .15s,background .15s;}
+.about-link:hover{color:var(--accent-ink);border-color:var(--accent);background:var(--accent-wash)}
+
+.about-overlay{position:fixed;inset:0;background:rgba(33,28,21,.4);display:flex;align-items:center;justify-content:center;padding:24px;z-index:50;}
+.about-panel{position:relative;max-width:520px;width:100%;max-height:80vh;overflow-y:auto;background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);box-shadow:var(--shadow);padding:30px 26px 26px;font-family:var(--ui);font-size:13.5px;color:var(--ink-soft);line-height:1.6;}
+.about-panel h2{margin:0 0 12px;font-family:var(--serif);font-size:20px;color:var(--ink);font-weight:600;}
+.about-panel p{margin:0 0 12px;}
+.about-panel p:last-child{margin-bottom:0}
+.about-panel b{color:var(--ink)}
+.about-close{position:absolute;top:14px;inset-inline-end:14px;width:30px;height:30px;border-radius:50%;border:1px solid var(--rule);background:var(--card);color:var(--ink-soft);font-size:18px;line-height:1;cursor:pointer;display:grid;place-items:center;transition:color .15s,border-color .15s;}
+.about-close:hover{color:var(--accent-ink);border-color:var(--accent)}
 
 @media(max-width:720px){
   .results.with-original .card-grid{grid-template-columns:1fr}
@@ -201,8 +210,8 @@ footer b{color:var(--ink-soft)}
   @page{margin:18mm 16mm}
   body{background:#fff;background-image:none}
   header,.uploader,.controls,.progress-wrap,.results-bar,.provider-card,.privacy-note,
-  .advanced-section,.rate-limit-banner,
-  .page-tag,.col-label,.card-orig,.b-figure .hint,footer{display:none !important}
+  .advanced-section,.rate-limit-banner,.about-link,.about-overlay,
+  .page-tag,.col-label,.card-orig,.b-figure .hint{display:none !important}
   .results.with-original .card-grid{display:block}
   .page-card{border:none;padding:0;opacity:1;transform:none;animation:none}
   .doc{max-width:none;font-size:13pt;line-height:1.8}

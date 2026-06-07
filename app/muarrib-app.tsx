@@ -22,6 +22,7 @@ declare global {
 
 // ─── App types
 type Provider = 'anthropic' | 'gemini';
+type KeyStatus = 'unverified' | 'verifying' | 'verified' | 'invalid';
 type PageStatus = 'pending' | 'done' | 'failed';
 interface PageState {
   num: number;
@@ -299,6 +300,60 @@ function BlocksView({ blocks }: { blocks: Block[] }) {
   );
 }
 
+// ─── Key field: input + Confirm/locked states for BYOK verification
+function KeyField({
+  placeholder, value, status, error, running, linkHref, linkLabel, onInput, onConfirm, onChangeKey,
+}: {
+  placeholder: string;
+  value: string;
+  status: KeyStatus;
+  error: string;
+  running: boolean;
+  linkHref: string;
+  linkLabel: string;
+  onInput: (v: string) => void;
+  onConfirm: () => void;
+  onChangeKey: () => void;
+}) {
+  const verified = status === 'verified';
+  const verifying = status === 'verifying';
+  return (
+    <>
+      <div className="key-row">
+        <input
+          type="password"
+          className={`key-input${verified ? ' locked' : ''}`}
+          placeholder={placeholder}
+          value={value}
+          onChange={e => onInput(e.target.value)}
+          disabled={running || verified || verifying}
+          readOnly={verified}
+          autoComplete="off"
+        />
+        {verified ? (
+          <>
+            <span className="key-active">✓ Key active</span>
+            <button type="button" className="link-btn" onClick={onChangeKey} disabled={running}>
+              Change
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="btn ghost confirm-btn"
+            onClick={onConfirm}
+            disabled={running || !value.trim() || verifying}
+          >
+            {verifying ? 'Checking…' : 'Confirm'}
+          </button>
+        )}
+        <a className="key-link" href={linkHref} target="_blank" rel="noopener noreferrer">{linkLabel}</a>
+      </div>
+      {status === 'invalid' && error && <div className="key-error">{error}</div>}
+    </>
+  );
+}
+
 // ─── Main component
 export default function MuarribApp() {
   // PDF state
@@ -321,6 +376,8 @@ export default function MuarribApp() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [byokProvider, setByokProvider] = useState<Provider>('gemini');
   const [byokKey, setByokKey] = useState('');
+  const [keyStatus, setKeyStatus] = useState<KeyStatus>('unverified');
+  const [keyError, setKeyError] = useState('');
   const [rateLimitHit, setRateLimitHit] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -342,6 +399,60 @@ export default function MuarribApp() {
     setShowOriginal(false);
     setLabel(null);
   }, []);
+
+  // ─── BYOK key verification
+  const handleKeyInput = useCallback((value: string) => {
+    setByokKey(value);
+    setKeyStatus('unverified');
+    setKeyError('');
+  }, []);
+
+  const handleProviderChange = useCallback((p: Provider) => {
+    setByokProvider(p);
+    setByokKey('');
+    setKeyStatus('unverified');
+    setKeyError('');
+  }, []);
+
+  const changeKey = useCallback(() => {
+    setKeyStatus('unverified');
+    setKeyError('');
+  }, []);
+
+  const confirmKey = useCallback(async () => {
+    const trimmed = byokKey.trim();
+    if (!trimmed) return;
+
+    const prefix = byokProvider === 'gemini' ? 'AIza' : 'sk-ant-';
+    if (!trimmed.startsWith(prefix)) {
+      setKeyStatus('invalid');
+      setKeyError(
+        `This doesn't look like a valid key — ${byokProvider === 'gemini' ? 'Gemini' : 'Anthropic'} keys start with "${prefix}".`
+      );
+      return;
+    }
+
+    setKeyStatus('verifying');
+    setKeyError('');
+    try {
+      const res = await fetch('/api/verify-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-api-key': trimmed },
+        body: JSON.stringify({ provider: byokProvider }),
+      });
+      const data: { valid?: boolean; error?: string } = await res.json();
+      if (data.valid) {
+        setByokKey(trimmed);
+        setKeyStatus('verified');
+      } else {
+        setKeyStatus('invalid');
+        setKeyError(data.error ?? 'Key rejected — double-check it.');
+      }
+    } catch {
+      setKeyStatus('invalid');
+      setKeyError("Couldn't reach the server to verify — check your connection and try again.");
+    }
+  }, [byokKey, byokProvider]);
 
   // ─── File loading
   const loadFile = useCallback(async (file: File | null | undefined) => {
@@ -386,7 +497,9 @@ export default function MuarribApp() {
   // ─── Translation
   const run = useCallback(async () => {
     if (running || !pdfDoc) return;
-    const usByok = byokKey.trim().length > 0;
+    const keyEntered = byokKey.trim().length > 0;
+    if (keyEntered && keyStatus !== 'verified') return; // unverified BYOK key — block translation
+    const usByok = keyStatus === 'verified';
     const prov: Provider = usByok ? byokProvider : 'anthropic';
     const key = usByok ? byokKey.trim() : '';
     setRateLimitHit(false);
@@ -406,19 +519,23 @@ export default function MuarribApp() {
       processOnePage(num, doc, prov, key, cache, updatePage, () => setRateLimitHit(true)),
     );
     setRunning(false);
-  }, [running, pdfDoc, byokKey, byokProvider, fileName, clamp, updatePage]);
+  }, [running, pdfDoc, byokKey, byokProvider, keyStatus, fileName, clamp, updatePage]);
 
   const retryPage = useCallback(async (num: number) => {
     if (!pdfDoc) return;
-    const usByok = byokKey.trim().length > 0;
+    const keyEntered = byokKey.trim().length > 0;
+    if (keyEntered && keyStatus !== 'verified') return;
+    const usByok = keyStatus === 'verified';
     const prov: Provider = usByok ? byokProvider : 'anthropic';
     const key = usByok ? byokKey.trim() : '';
     updatePage(num, { status: 'pending', error: null });
     await processOnePage(num, pdfDoc, prov, key, imageCache.current, updatePage, () => setRateLimitHit(true));
-  }, [pdfDoc, byokKey, byokProvider, updatePage]);
+  }, [pdfDoc, byokKey, byokProvider, keyStatus, updatePage]);
 
   // ─── Derived
-  const usingByok = byokKey.trim().length > 0;
+  const usingByok = keyStatus === 'verified';
+  const keyEntered = byokKey.trim().length > 0;
+  const blockedByUnverifiedKey = keyEntered && keyStatus !== 'verified';
   const range = clamp();
   const finished = pages.filter(p => p.status === 'done' || p.status === 'failed').length;
   const failed = pages.filter(p => p.status === 'failed').length;
@@ -554,17 +671,24 @@ export default function MuarribApp() {
             <button
               className="btn primary"
               onClick={run}
-              disabled={running || !pdfDoc}
+              disabled={running || !pdfDoc || blockedByUnverifiedKey}
             >
               {running ? 'Translating…' : 'Translate to Arabic'}
             </button>
+            {blockedByUnverifiedKey && (
+              <div className="key-block-hint">
+                {keyStatus === 'verifying'
+                  ? 'Verifying your key…'
+                  : 'Confirm your API key in Advanced settings below to translate with it — or clear it to use the free default.'}
+              </div>
+            )}
           </div>
         </div>
 
         {/* ── Rate-limit banner ── */}
         {rateLimitHit && !usingByok && (
           <div className="rate-limit-banner">
-            <b>Free daily limit reached.</b> You&apos;ve translated {30} pages today on the shared key.{' '}
+            <b>Free daily limit reached.</b> You&apos;ve hit today&apos;s free-page limit on the shared key.{' '}
             <button
               className="link-btn"
               onClick={() => { setAdvancedOpen(true); }}
@@ -600,7 +724,7 @@ export default function MuarribApp() {
                       name="byok-provider"
                       value="gemini"
                       checked={byokProvider === 'gemini'}
-                      onChange={() => setByokProvider('gemini')}
+                      onChange={() => handleProviderChange('gemini')}
                       disabled={running}
                     />
                     <div>
@@ -610,20 +734,18 @@ export default function MuarribApp() {
                   </label>
                   {byokProvider === 'gemini' && (
                     <div className="key-expand">
-                      <div className="key-row">
-                        <input
-                          type="password"
-                          className="key-input"
-                          placeholder="Paste your Gemini API key (AIza…)"
-                          value={byokKey}
-                          onChange={e => setByokKey(e.target.value)}
-                          disabled={running}
-                          autoComplete="off"
-                        />
-                        <a className="key-link" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">
-                          Get a free key →
-                        </a>
-                      </div>
+                      <KeyField
+                        placeholder="Paste your Gemini API key (AIza…)"
+                        value={byokKey}
+                        status={keyStatus}
+                        error={keyError}
+                        running={running}
+                        linkHref="https://aistudio.google.com/apikey"
+                        linkLabel="Get a free key →"
+                        onInput={handleKeyInput}
+                        onConfirm={confirmKey}
+                        onChangeKey={changeKey}
+                      />
                       <div className="warn-note">
                         The free Gemini tier may use your prompts to improve Google&apos;s models.
                         <strong> Not for confidential or patient documents.</strong>
@@ -638,7 +760,7 @@ export default function MuarribApp() {
                       name="byok-provider"
                       value="anthropic"
                       checked={byokProvider === 'anthropic'}
-                      onChange={() => setByokProvider('anthropic')}
+                      onChange={() => handleProviderChange('anthropic')}
                       disabled={running}
                     />
                     <div>
@@ -648,20 +770,18 @@ export default function MuarribApp() {
                   </label>
                   {byokProvider === 'anthropic' && (
                     <div className="key-expand">
-                      <div className="key-row">
-                        <input
-                          type="password"
-                          className="key-input"
-                          placeholder="Paste your Anthropic API key (sk-ant-…)"
-                          value={byokKey}
-                          onChange={e => setByokKey(e.target.value)}
-                          disabled={running}
-                          autoComplete="off"
-                        />
-                        <a className="key-link" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">
-                          Get a key →
-                        </a>
-                      </div>
+                      <KeyField
+                        placeholder="Paste your Anthropic API key (sk-ant-…)"
+                        value={byokKey}
+                        status={keyStatus}
+                        error={keyError}
+                        running={running}
+                        linkHref="https://console.anthropic.com/settings/keys"
+                        linkLabel="Get a key →"
+                        onInput={handleKeyInput}
+                        onConfirm={confirmKey}
+                        onChangeKey={changeKey}
+                      />
                     </div>
                   )}
                 </div>

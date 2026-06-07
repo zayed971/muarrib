@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import Script from 'next/script';
 import type { Block } from '@/lib/types';
 
@@ -175,17 +175,17 @@ async function processOnePage(
 // ─── Block rendering
 type TableCell = { ar: string; en?: string } | string;
 
-function CellContent({ cell }: { cell: TableCell }) {
+function CellContent({ cell, showEnglish }: { cell: TableCell; showEnglish: boolean }) {
   const c = typeof cell === 'object' && cell !== null ? cell : { ar: String(cell ?? '') };
   return (
     <>
       {c.ar}
-      {c.en && <bdi className="term-en">({c.en})</bdi>}
+      {showEnglish && c.en && <bdi className="term-en">({c.en})</bdi>}
     </>
   );
 }
 
-function BlockItem({ block }: { block: Block }) {
+function BlockItem({ block, showEnglish }: { block: Block; showEnglish: boolean }) {
   let inner: React.ReactNode;
 
   switch (block.type) {
@@ -193,7 +193,7 @@ function BlockItem({ block }: { block: Block }) {
       inner = (
         <h3 className="b-h">
           {block.ar}
-          {block.en && <span className="en">{block.en}</span>}
+          {showEnglish && block.en && <span className="en">{block.en}</span>}
         </h3>
       );
       break;
@@ -201,7 +201,7 @@ function BlockItem({ block }: { block: Block }) {
       inner = (
         <h4 className="b-sh">
           {block.ar}
-          {block.en && <span className="en">{block.en}</span>}
+          {showEnglish && block.en && <span className="en">{block.en}</span>}
         </h4>
       );
       break;
@@ -249,7 +249,7 @@ function BlockItem({ block }: { block: Block }) {
               <thead>
                 <tr>
                   {(rows[0] ?? []).map((cell, ci) => (
-                    <th key={ci}><CellContent cell={cell as TableCell} /></th>
+                    <th key={ci}><CellContent cell={cell as TableCell} showEnglish={showEnglish} /></th>
                   ))}
                 </tr>
               </thead>
@@ -258,7 +258,7 @@ function BlockItem({ block }: { block: Block }) {
               {rows.slice(1).map((row, ri) => (
                 <tr key={ri}>
                   {(row ?? []).map((cell, ci) => (
-                    <td key={ci}><CellContent cell={cell as TableCell} /></td>
+                    <td key={ci}><CellContent cell={cell as TableCell} showEnglish={showEnglish} /></td>
                   ))}
                 </tr>
               ))}
@@ -285,7 +285,7 @@ function BlockItem({ block }: { block: Block }) {
   return <>{inner}</>;
 }
 
-function BlocksView({ blocks }: { blocks: Block[] }) {
+function BlocksView({ blocks, showEnglish }: { blocks: Block[]; showEnglish: boolean }) {
   if (!blocks.length) {
     return (
       <p className="b-cap">
@@ -295,7 +295,7 @@ function BlocksView({ blocks }: { blocks: Block[] }) {
   }
   return (
     <>
-      {blocks.map((b, i) => <BlockItem key={i} block={b} />)}
+      {blocks.map((b, i) => <BlockItem key={i} block={b} showEnglish={showEnglish} />)}
     </>
   );
 }
@@ -370,6 +370,7 @@ export default function MuarribApp() {
   const [pages, setPages] = useState<PageState[]>([]);
   const [running, setRunning] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
+  const [showEnglish, setShowEnglish] = useState(false);
   const [label, setLabel] = useState<{ fileName: string; from: number; to: number } | null>(null);
 
   // Advanced / BYOK state (collapsed by default — default mode needs no key)
@@ -382,6 +383,14 @@ export default function MuarribApp() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageCache = useRef<Map<number, string>>(new Map());
+
+  // ─── Remember the "show English terms" choice for this browser session
+  useEffect(() => {
+    if (sessionStorage.getItem('muarrib-show-english') === 'true') setShowEnglish(true);
+  }, []);
+  useEffect(() => {
+    sessionStorage.setItem('muarrib-show-english', String(showEnglish));
+  }, [showEnglish]);
 
   // ─── Helpers
   const clamp = useCallback(() => {
@@ -831,6 +840,12 @@ export default function MuarribApp() {
           </span>
           <div className="spacer" />
           <button
+            className={`btn ghost${showEnglish ? ' on' : ''}`}
+            onClick={() => setShowEnglish(v => !v)}
+          >
+            {showEnglish ? 'Hide English terms' : 'Show English terms'}
+          </button>
+          <button
             className={`btn ghost${showOriginal ? ' on' : ''}`}
             onClick={() => setShowOriginal(v => !v)}
           >
@@ -856,7 +871,7 @@ export default function MuarribApp() {
                   <div className="doc">
                     {p.status === 'pending' && <div className="skeleton" />}
                     {p.status === 'done' && p.blocks != null && (
-                      <BlocksView blocks={p.blocks} />
+                      <BlocksView blocks={p.blocks} showEnglish={showEnglish} />
                     )}
                     {p.status === 'failed' && (
                       <div className="page-failed">

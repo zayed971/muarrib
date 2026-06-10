@@ -489,6 +489,11 @@ export default function MuarribApp() {
       setLoadError('The PDF engine didn\'t load (network blocked the CDN). Reload the page.');
       return;
     }
+    // Defensive: the Script onLoad sets this, but a cached script can fire its
+    // load event before the handler is attached, leaving it unset.
+    if (!window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER;
+    }
     try {
       const buf = await file.arrayBuffer();
       const doc = await window.pdfjsLib.getDocument({ data: buf }).promise;
@@ -582,7 +587,12 @@ export default function MuarribApp() {
         src={PDF_SRC}
         strategy="afterInteractive"
         onLoad={() => {
-          window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER;
+          // Cached scripts can fire onLoad in odd orders — guard against
+          // window.pdfjsLib not being defined yet to avoid an uncaught
+          // TypeError that would crash the whole app.
+          if (window.pdfjsLib) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER;
+          }
         }}
       />
 

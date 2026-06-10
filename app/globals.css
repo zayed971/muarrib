@@ -37,6 +37,11 @@ body{
 }
 .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
 
+.error-page{max-width:60ch;margin:80px auto;text-align:center;padding:40px 30px;background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);box-shadow:var(--shadow);}
+.error-page h1{font-family:var(--serif);font-size:22px;font-weight:600;margin:0 0 14px;color:var(--ink);}
+.error-page p{font-family:var(--ui);font-size:14px;color:var(--ink-soft);line-height:1.6;margin:0 0 22px;}
+.error-page .error-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;}
+
 /* Header */
 header{padding:40px 0 26px;border-bottom:1px solid var(--rule);margin-bottom:34px;}
 .brand{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}

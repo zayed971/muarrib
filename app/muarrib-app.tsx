@@ -2,7 +2,18 @@
 
 import { useRef, useState, useCallback, useEffect } from 'react';
 import Script from 'next/script';
+import DOMPurify from 'dompurify';
+import { escapeHtml } from '@/lib/sanitize';
 import type { Block } from '@/lib/types';
+
+// ─── Model output is untrusted: escape HTML-significant characters, then run
+// the assembled markup through DOMPurify as a second layer before it's used
+// with dangerouslySetInnerHTML. SSR has no DOM, so pass the escaped HTML
+// through unchanged there — it only ever renders once the client hydrates.
+function sanitizeHtml(html: string): string {
+  if (typeof window === 'undefined') return html;
+  return DOMPurify.sanitize(html);
+}
 
 // ─── pdf.js minimal types (CDN global)
 interface PdfViewport { width: number; height: number; }
@@ -107,14 +118,18 @@ async function callProxy(
     headers,
     body: JSON.stringify({ imageBase64, pageNum, provider }),
   });
-  const data: { blocks?: Block[]; error?: string; truncated?: boolean; parseFailed?: boolean; rateLimited?: boolean } =
-    await res.json();
-  if (data.rateLimited) {
-    const e = new Error(data.error ?? 'Daily page limit reached');
-    (e as Error & { rateLimited: boolean }).rateLimited = true;
+  const data: {
+    blocks?: Block[];
+    error?: { ar: string; en: string };
+    code?: string;
+    truncated?: boolean;
+    parseFailed?: boolean;
+  } = await res.json();
+  if (!res.ok || data.error) {
+    const e = new Error(data.error?.en ?? `HTTP ${res.status}`);
+    if (data.code === 'RATE_LIMITED') (e as Error & { rateLimited: boolean }).rateLimited = true;
     throw e;
   }
-  if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`);
   return { blocks: data.blocks ?? [], truncated: data.truncated ?? false, parseFailed: data.parseFailed ?? false };
 }
 
@@ -187,48 +202,41 @@ async function processOnePage(
 // ─── Block rendering
 type TableCell = { ar: string; en?: string } | string;
 
-function CellContent({ cell, showEnglish }: { cell: TableCell; showEnglish: boolean }) {
+// Build sanitized inner-HTML for a table cell: escaped Arabic text, plus an
+// optional escaped English term in parentheses when "Show English terms" is on.
+function cellHtml(cell: TableCell, showEnglish: boolean): string {
   const c = typeof cell === 'object' && cell !== null ? cell : { ar: String(cell ?? '') };
-  return (
-    <>
-      {c.ar}
-      {showEnglish && c.en && <bdi className="term-en">({c.en})</bdi>}
-    </>
-  );
+  let html = escapeHtml(c.ar ?? '');
+  if (showEnglish && c.en) html += `<bdi class="term-en">(${escapeHtml(c.en)})</bdi>`;
+  return sanitizeHtml(html);
 }
 
 function BlockItem({ block, showEnglish }: { block: Block; showEnglish: boolean }) {
   let inner: React.ReactNode;
 
   switch (block.type) {
-    case 'heading':
-      inner = (
-        <h3 className="b-h">
-          {block.ar}
-          {showEnglish && block.en && <span className="en">{block.en}</span>}
-        </h3>
-      );
+    case 'heading': {
+      let html = escapeHtml(block.ar ?? '');
+      if (showEnglish && block.en) html += `<span class="en">${escapeHtml(block.en)}</span>`;
+      inner = <h3 className="b-h" dangerouslySetInnerHTML={{ __html: sanitizeHtml(html) }} />;
       break;
-    case 'subheading':
-      inner = (
-        <h4 className="b-sh">
-          {block.ar}
-          {showEnglish && block.en && <span className="en">{block.en}</span>}
-        </h4>
-      );
+    }
+    case 'subheading': {
+      let html = escapeHtml(block.ar ?? '');
+      if (showEnglish && block.en) html += `<span class="en">${escapeHtml(block.en)}</span>`;
+      inner = <h4 className="b-sh" dangerouslySetInnerHTML={{ __html: sanitizeHtml(html) }} />;
       break;
+    }
     case 'paragraph':
-      inner = <p className="b-p">{block.ar}</p>;
+      inner = <p className="b-p" dangerouslySetInnerHTML={{ __html: sanitizeHtml(escapeHtml(block.ar ?? '')) }} />;
       break;
-    case 'list':
-      inner = (
-        <ul className="b-list">
-          {(block.items ?? []).map((it, i) => <li key={i}>{it}</li>)}
-        </ul>
-      );
+    case 'list': {
+      const html = (block.items ?? []).map(it => `<li>${escapeHtml(it)}</li>`).join('');
+      inner = <ul className="b-list" dangerouslySetInnerHTML={{ __html: sanitizeHtml(html) }} />;
       break;
+    }
     case 'caption':
-      inner = <p className="b-cap">{block.ar}</p>;
+      inner = <p className="b-cap" dangerouslySetInnerHTML={{ __html: sanitizeHtml(escapeHtml(block.ar ?? '')) }} />;
       break;
     case 'figure':
       inner = (
@@ -241,16 +249,28 @@ function BlockItem({ block, showEnglish }: { block: Block; showEnglish: boolean 
             </svg>
             شكل / رسم بياني
           </div>
-          <div className="fdesc">{block.ar}</div>
+          <div className="fdesc" dangerouslySetInnerHTML={{ __html: sanitizeHtml(escapeHtml(block.ar ?? '')) }} />
           <div className="hint">اضغط «Show original» لرؤية الشكل الأصلي.</div>
         </div>
       );
       break;
     case 'equation':
-      inner = <div className="b-eq" dir="ltr">{block.content ?? block.ar}</div>;
+      inner = (
+        <div
+          className="b-eq"
+          dir="ltr"
+          dangerouslySetInnerHTML={{ __html: sanitizeHtml(escapeHtml(block.content ?? block.ar ?? '')) }}
+        />
+      );
       break;
     case 'code':
-      inner = <pre className="b-code" dir="ltr">{block.content ?? block.ar}</pre>;
+      inner = (
+        <pre
+          className="b-code"
+          dir="ltr"
+          dangerouslySetInnerHTML={{ __html: sanitizeHtml(escapeHtml(block.content ?? block.ar ?? '')) }}
+        />
+      );
       break;
     case 'table': {
       const rows = block.rows ?? [];
@@ -261,7 +281,7 @@ function BlockItem({ block, showEnglish }: { block: Block; showEnglish: boolean 
               <thead>
                 <tr>
                   {(rows[0] ?? []).map((cell, ci) => (
-                    <th key={ci}><CellContent cell={cell as TableCell} showEnglish={showEnglish} /></th>
+                    <th key={ci} dangerouslySetInnerHTML={{ __html: cellHtml(cell as TableCell, showEnglish) }} />
                   ))}
                 </tr>
               </thead>
@@ -270,7 +290,7 @@ function BlockItem({ block, showEnglish }: { block: Block; showEnglish: boolean 
               {rows.slice(1).map((row, ri) => (
                 <tr key={ri}>
                   {(row ?? []).map((cell, ci) => (
-                    <td key={ci}><CellContent cell={cell as TableCell} showEnglish={showEnglish} /></td>
+                    <td key={ci} dangerouslySetInnerHTML={{ __html: cellHtml(cell as TableCell, showEnglish) }} />
                   ))}
                 </tr>
               ))}
@@ -281,7 +301,9 @@ function BlockItem({ block, showEnglish }: { block: Block; showEnglish: boolean 
       break;
     }
     default:
-      inner = block.ar ? <p className="b-p">{block.ar}</p> : null;
+      inner = block.ar
+        ? <p className="b-p" dangerouslySetInnerHTML={{ __html: sanitizeHtml(escapeHtml(block.ar)) }} />
+        : null;
   }
 
   if (!inner) return null;

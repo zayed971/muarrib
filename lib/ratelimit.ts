@@ -4,10 +4,12 @@
 //
 // Override the cap without a deploy: set DAILY_PAGE_CAP in your Vercel env vars.
 
+import { LIMITS } from './config';
+
 interface Bucket { count: number; resetAt: number }
 const store = new Map<string, Bucket>();
 
-export const DAILY_PAGE_CAP = parseInt(process.env.DAILY_PAGE_CAP ?? '30', 10);
+export const DAILY_PAGE_CAP = parseInt(process.env.DAILY_PAGE_CAP ?? String(LIMITS.perIpDailyPages), 10);
 
 function nextMidnightUtc(): number {
   const d = new Date();

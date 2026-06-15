@@ -28,6 +28,15 @@ declare global {
       GlobalWorkerOptions: { workerSrc: string };
       getDocument(o: { data: ArrayBuffer }): { promise: Promise<PdfDocument> };
     };
+    turnstile?: {
+      render(container: string | HTMLElement, options: {
+        sitekey: string;
+        callback: (token: string) => void;
+        'error-callback'?: () => void;
+        'expired-callback'?: () => void;
+      }): string;
+      reset(widgetId?: string): void;
+    };
   }
 }
 
@@ -54,6 +63,7 @@ const JPEG_QUALITY = 0.8;
 const WARN_ABOVE = 40;
 const PDF_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
 const PDF_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const TURNSTILE_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
 
 // ─── Utility: render one PDF page to a JPEG data-URL (browser-side, no upload)
 async function renderPageImage(doc: PdfDocument, num: number): Promise<string> {
@@ -128,6 +138,7 @@ async function callProxy(
   if (!res.ok || data.error) {
     const e = new Error(data.error?.en ?? `HTTP ${res.status}`);
     if (data.code === 'RATE_LIMITED') (e as Error & { rateLimited: boolean }).rateLimited = true;
+    if (data.code === 'VERIFICATION') (e as Error & { verificationFailed: boolean }).verificationFailed = true;
     throw e;
   }
   return { blocks: data.blocks ?? [], truncated: data.truncated ?? false, parseFailed: data.parseFailed ?? false };
@@ -163,6 +174,7 @@ async function processOnePage(
   imageCache: Map<number, string>,
   onUpdate: (num: number, patch: Partial<PageState>) => void,
   onRateLimit?: () => void,
+  onVerificationFailed?: () => void,
 ): Promise<void> {
   try {
     let image = imageCache.get(num) ?? null;
@@ -192,6 +204,7 @@ async function processOnePage(
     }
   } catch (err) {
     if ((err as { rateLimited?: boolean }).rateLimited) onRateLimit?.();
+    if ((err as { verificationFailed?: boolean }).verificationFailed) onVerificationFailed?.();
     onUpdate(num, {
       status: 'failed',
       error: err instanceof Error ? err.message : String(err),
@@ -417,8 +430,15 @@ export default function MuarribApp() {
   const [keyError, setKeyError] = useState('');
   const [rateLimitHit, setRateLimitHit] = useState(false);
 
+  // Cloudflare Turnstile (bot check for the free server-key path)
+  const [verified, setVerified] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyError, setVerifyError] = useState('');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageCache = useRef<Map<number, string>>(new Map());
+  const turnstileRef = useRef<HTMLDivElement>(null);
+  const turnstileWidgetId = useRef<string | null>(null);
 
   // ─── Remember the "show English terms" choice for this browser session
   useEffect(() => {
@@ -462,6 +482,39 @@ export default function MuarribApp() {
   const changeKey = useCallback(() => {
     setKeyStatus('unverified');
     setKeyError('');
+  }, []);
+
+  // ─── Turnstile bot-check (only required for the free server-key path)
+  const verify = useCallback(async (token: string) => {
+    setVerifying(true);
+    setVerifyError('');
+    try {
+      const res = await fetch('/api/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      const data: { ok?: boolean; error?: { en: string } } = await res.json();
+      if (data.ok) {
+        setVerified(true);
+      } else {
+        setVerified(false);
+        setVerifyError(data.error?.en ?? 'Security check failed — please try again.');
+        if (turnstileWidgetId.current) window.turnstile?.reset(turnstileWidgetId.current);
+      }
+    } catch {
+      setVerified(false);
+      setVerifyError("Couldn't reach the server to verify — check your connection.");
+      if (turnstileWidgetId.current) window.turnstile?.reset(turnstileWidgetId.current);
+    } finally {
+      setVerifying(false);
+    }
+  }, []);
+
+  const handleVerificationFailed = useCallback(() => {
+    setVerified(false);
+    setVerifyError('Security check expired — please verify again.');
+    if (turnstileWidgetId.current) window.turnstile?.reset(turnstileWidgetId.current);
   }, []);
 
   const confirmKey = useCallback(async () => {
@@ -550,6 +603,7 @@ export default function MuarribApp() {
     const keyEntered = byokKey.trim().length > 0;
     if (keyEntered && keyStatus !== 'verified') return; // unverified BYOK key — block translation
     const usByok = keyStatus === 'verified';
+    if (!usByok && !verified) return; // security check not completed — block translation
     const prov: Provider = usByok ? byokProvider : 'anthropic';
     const key = usByok ? byokKey.trim() : '';
     setRateLimitHit(false);
@@ -571,11 +625,11 @@ export default function MuarribApp() {
     const spacing = prov === 'gemini' ? GEMINI_SPACING_MS : 0;
 
     await runPool(nums, limit, num =>
-      processOnePage(num, doc, prov, key, cache, updatePage, () => setRateLimitHit(true)),
+      processOnePage(num, doc, prov, key, cache, updatePage, () => setRateLimitHit(true), handleVerificationFailed),
       spacing,
     );
     setRunning(false);
-  }, [running, pdfDoc, byokKey, byokProvider, keyStatus, fileName, clamp, updatePage]);
+  }, [running, pdfDoc, byokKey, byokProvider, keyStatus, verified, fileName, clamp, updatePage, handleVerificationFailed]);
 
   const retryPage = useCallback(async (num: number) => {
     if (!pdfDoc) return;
@@ -585,13 +639,14 @@ export default function MuarribApp() {
     const prov: Provider = usByok ? byokProvider : 'anthropic';
     const key = usByok ? byokKey.trim() : '';
     updatePage(num, { status: 'pending', error: null });
-    await processOnePage(num, pdfDoc, prov, key, imageCache.current, updatePage, () => setRateLimitHit(true));
-  }, [pdfDoc, byokKey, byokProvider, keyStatus, updatePage]);
+    await processOnePage(num, pdfDoc, prov, key, imageCache.current, updatePage, () => setRateLimitHit(true), handleVerificationFailed);
+  }, [pdfDoc, byokKey, byokProvider, keyStatus, updatePage, handleVerificationFailed]);
 
   // ─── Derived
   const usingByok = keyStatus === 'verified';
   const keyEntered = byokKey.trim().length > 0;
   const blockedByUnverifiedKey = keyEntered && keyStatus !== 'verified';
+  const blockedByVerification = !usingByok && !verified;
   const range = clamp();
   const finished = pages.filter(p => p.status === 'done' || p.status === 'failed').length;
   const failed = pages.filter(p => p.status === 'failed').length;
@@ -614,6 +669,24 @@ export default function MuarribApp() {
           // TypeError that would crash the whole app.
           if (window.pdfjsLib) {
             window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER;
+          }
+        }}
+      />
+
+      <Script
+        src={TURNSTILE_SRC}
+        strategy="afterInteractive"
+        onLoad={() => {
+          if (window.turnstile && turnstileRef.current && !turnstileWidgetId.current) {
+            turnstileWidgetId.current = window.turnstile.render(turnstileRef.current, {
+              sitekey: process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? '',
+              callback: verify,
+              'error-callback': () => {
+                setVerified(false);
+                setVerifyError('Security check failed to load. Reload the page.');
+              },
+              'expired-callback': () => setVerified(false),
+            });
           }
         }}
       />
@@ -735,7 +808,7 @@ export default function MuarribApp() {
             <button
               className="btn primary"
               onClick={run}
-              disabled={running || !pdfDoc || blockedByUnverifiedKey}
+              disabled={running || !pdfDoc || blockedByUnverifiedKey || blockedByVerification}
             >
               {running ? 'Translating…' : 'Translate to Arabic'}
             </button>
@@ -746,7 +819,18 @@ export default function MuarribApp() {
                   : 'Confirm your API key in Advanced settings below to translate with it — or clear it to use the free default.'}
               </div>
             )}
+            {!blockedByUnverifiedKey && blockedByVerification && (
+              <div className="key-block-hint">
+                {verifying ? 'Verifying…' : 'Complete the security check above to translate.'}
+              </div>
+            )}
           </div>
+          {!usingByok && (
+            <div className="turnstile-wrap">
+              <div ref={turnstileRef} />
+              {verifyError && <div className="key-error">{verifyError}</div>}
+            </div>
+          )}
         </div>
 
         {/* ── Rate-limit banner ── */}

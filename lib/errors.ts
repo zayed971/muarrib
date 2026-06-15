@@ -17,6 +17,7 @@ export type ErrorCode =
   | 'TRUNCATED'
   | 'PARSE_FAILED'
   | 'TIMEOUT'
+  | 'VERIFICATION' // failed/absent bot check (Turnstile)
   | 'INTERNAL';
 
 const STATUS: Record<ErrorCode, number> = {
@@ -28,6 +29,7 @@ const STATUS: Record<ErrorCode, number> = {
   TRUNCATED: 422,
   PARSE_FAILED: 502,
   TIMEOUT: 504,
+  VERIFICATION: 403,
   INTERNAL: 500,
 };
 
@@ -68,6 +70,10 @@ const MESSAGES: Record<ErrorCode, UserMessage> = {
   TIMEOUT: {
     ar: 'استغرقت الترجمة وقتًا طويلًا. أعد المحاولة.',
     en: 'The translation took too long. Please retry.',
+  },
+  VERIFICATION: {
+    ar: 'يرجى تحديث الصفحة وإكمال التحقق الأمني ثم المحاولة من جديد.',
+    en: 'Please refresh the page and complete the security check, then try again.',
   },
   INTERNAL: {
     ar: 'حدث خطأ غير متوقع. أعد المحاولة.',

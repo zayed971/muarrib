@@ -1,22 +1,13 @@
 import { GoogleGenerativeAI, FinishReason } from '@google/generative-ai';
-import { GEMINI_MODEL, MAX_TOKENS } from '@/lib/config';
+import { MAX_TOKENS } from '@/lib/config';
 import { buildPrompt } from '@/lib/prompt';
+import type { PageInput, RawResult, TranslationProvider } from './types';
 
-function retryDelayMs(err: Error): number {
-  // Parse the suggested retry delay from the Gemini error body ("retry in 20.25s")
-  const m = err.message.match(/retry in (\d+(?:\.\d+)?)s/i);
-  return m ? Math.ceil(parseFloat(m[1]) * 1000) : 30_000;
-}
-
-async function generate(
-  imageBase64: string,
-  pageNum: number,
-  apiKey: string,
-): Promise<{ text: string; truncated: boolean }> {
+async function translate({ imageBase64, pageNum, apiKey, model }: PageInput): Promise<RawResult> {
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+  const genModel = genAI.getGenerativeModel({ model });
 
-  const result = await model.generateContent({
+  const result = await genModel.generateContent({
     contents: [
       {
         role: 'user',
@@ -42,21 +33,7 @@ async function generate(
   return { text, truncated: finishReason === FinishReason.MAX_TOKENS };
 }
 
-export async function callGemini(
-  imageBase64: string,
-  pageNum: number,
-  apiKey: string,
-): Promise<{ text: string; truncated: boolean }> {
-  try {
-    return await generate(imageBase64, pageNum, apiKey);
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('[429')) {
-      // Free tier: 5 req/min. Wait for the server-suggested delay (capped to stay
-      // inside Vercel's 60-second function window) then retry once.
-      const delay = Math.min(retryDelayMs(err), 30_000);
-      await new Promise(r => setTimeout(r, delay));
-      return generate(imageBase64, pageNum, apiKey);
-    }
-    throw err;
-  }
-}
+export const geminiProvider: TranslationProvider = {
+  name: 'gemini',
+  translate,
+};

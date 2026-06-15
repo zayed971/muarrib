@@ -1,30 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { callAnthropic } from '@/lib/providers/anthropic';
-import { callGemini } from '@/lib/providers/gemini';
-import { checkAndIncrement, DAILY_PAGE_CAP } from '@/lib/ratelimit';
+import { anthropicProvider } from '@/lib/providers/anthropic';
+import { geminiProvider } from '@/lib/providers/gemini';
+import type { TranslationProvider } from '@/lib/providers/types';
+import { reliableCall } from '@/lib/reliable-call';
+import { isVerified, enforceLimits } from '@/lib/abuse-guard';
+import { rateStore } from '@/lib/rate-store';
 import { LIMITS, MODELS, serverKey } from '@/lib/config';
 import { TranslateRequestSchema, parseModelText, type SchemaBlock } from '@/lib/schema';
 import { validateImageBase64 } from '@/lib/validate-image';
-import { AppError, classifyProviderError, toApiError } from '@/lib/errors';
+import { AppError, toApiError } from '@/lib/errors';
 import { log, newRequestId } from '@/lib/logger';
 import type { Provider } from '@/lib/types';
 
 // Hobby plan cap: 60 s. With Fluid Compute enabled, raise to 300.
 export const maxDuration = 60;
 
-async function callProvider(
-  imageBase64: string,
-  pageNum: number,
-  provider: Provider,
-  apiKey: string,
-): Promise<{ text: string; truncated: boolean }> {
-  try {
-    if (provider === 'anthropic') return await callAnthropic(imageBase64, pageNum, apiKey);
-    return await callGemini(imageBase64, pageNum, apiKey);
-  } catch (err) {
-    throw classifyProviderError(err);
-  }
-}
+const PROVIDER_ADAPTERS: Record<Provider, TranslationProvider> = {
+  anthropic: anthropicProvider,
+  gemini: geminiProvider,
+};
 
 async function translateOnce(
   imageBase64: string,
@@ -32,7 +26,9 @@ async function translateOnce(
   provider: Provider,
   apiKey: string,
 ): Promise<{ blocks: SchemaBlock[]; truncated: boolean; parseFailed: boolean }> {
-  const { text, truncated } = await callProvider(imageBase64, pageNum, provider, apiKey);
+  const adapter = PROVIDER_ADAPTERS[provider];
+  const input = { imageBase64, pageNum, apiKey, model: MODELS[provider].default };
+  const { text, truncated } = await reliableCall(() => adapter.translate(input));
 
   try {
     return { blocks: parseModelText(text), truncated, parseFailed: false };
@@ -81,13 +77,17 @@ export async function POST(req: NextRequest) {
       throw new AppError('PROVIDER_AUTH', 'no API key configured for provider');
     }
 
-    if (!isByok) {
-      const ip = req.headers.get('x-forwarded-for')?.split(',')[0].trim() ?? 'unknown';
-      const { allowed } = checkAndIncrement(ip);
-      if (!allowed) {
-        log('rate_limited', { requestId, provider, pageNum });
-        throw new AppError('RATE_LIMITED', `daily cap (${DAILY_PAGE_CAP}) reached`);
-      }
+    const ip = req.headers.get('x-forwarded-for')?.split(',')[0].trim() ?? 'unknown';
+
+    if (!isByok && !(await isVerified(rateStore, ip))) {
+      throw new AppError('VERIFICATION', 'turnstile verification required');
+    }
+
+    try {
+      await enforceLimits(rateStore, ip, 1);
+    } catch (err) {
+      log('rate_limited', { requestId, provider, pageNum });
+      throw err;
     }
 
     const { blocks, truncated, parseFailed } = await translateOnce(imageBase64, pageNum, provider, apiKey);

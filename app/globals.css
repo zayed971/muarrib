@@ -75,6 +75,7 @@ header{padding:40px 0 26px;border-bottom:1px solid var(--rule);margin-bottom:34p
 .confirm-btn{padding:9px 18px;font-size:13px;flex:none;white-space:nowrap;}
 .key-error{font-family:var(--ui);font-size:12px;color:var(--brick);background:var(--brick-wash);border:1px solid #e6c6bf;border-radius:8px;padding:8px 12px;margin-top:6px;line-height:1.45;}
 .key-block-hint{font-family:var(--ui);font-size:12px;color:var(--amber);margin-top:10px;flex-basis:100%;}
+.turnstile-wrap{padding:0 20px 16px;}
 .privacy-note{margin-bottom:20px;font-family:var(--ui);font-size:12.5px;color:var(--ink-soft);line-height:1.55;background:var(--card);border:1px solid var(--rule-soft);border-radius:10px;padding:12px 16px;}
 .privacy-note b{color:var(--ink)}
 

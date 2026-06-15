@@ -1,16 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { ANTHROPIC_MODEL, MAX_TOKENS } from '@/lib/config';
+import { MAX_TOKENS } from '@/lib/config';
 import { buildPrompt } from '@/lib/prompt';
+import type { PageInput, RawResult, TranslationProvider } from './types';
 
-export async function callAnthropic(
-  imageBase64: string,
-  pageNum: number,
-  apiKey: string,
-): Promise<{ text: string; truncated: boolean }> {
+async function translate({ imageBase64, pageNum, apiKey, model }: PageInput): Promise<RawResult> {
   const client = new Anthropic({ apiKey });
 
   const message = await client.messages.create({
-    model: ANTHROPIC_MODEL,
+    model,
     max_tokens: MAX_TOKENS,
     messages: [
       {
@@ -35,3 +32,8 @@ export async function callAnthropic(
   if (!text) throw new Error('Empty response from Anthropic');
   return { text, truncated: message.stop_reason === 'max_tokens' };
 }
+
+export const anthropicProvider: TranslationProvider = {
+  name: 'anthropic',
+  translate,
+};

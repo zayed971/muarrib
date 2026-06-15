@@ -189,6 +189,10 @@ header{padding:40px 0 26px;border-bottom:1px solid var(--rule);margin-bottom:34p
 .lowconf{position:relative;border-inline-start:3px solid var(--amber);background:var(--amber-wash);padding:4px 14px;border-radius:0 8px 8px 0;margin-bottom:16px;}
 .lowconf .lc-tag{display:block;font-family:var(--ui);font-size:11px;color:var(--amber);font-weight:600;margin:6px 0 2px;}
 .number-warning{font-family:var(--ui);font-size:12.5px;color:var(--amber);background:var(--amber-wash);border:1px solid var(--amber);border-radius:8px;padding:8px 14px;margin-bottom:14px;}
+.export-menu{position:relative;}
+.export-dropdown{position:absolute;top:calc(100% + 6px);inset-inline-end:0;z-index:20;display:flex;flex-direction:column;min-width:180px;background:var(--card);border:1px solid var(--rule);border-radius:11px;box-shadow:var(--shadow);overflow:hidden;}
+.export-item{display:block;width:100%;text-align:start;background:none;border:none;font-family:var(--ui);font-size:13.5px;color:var(--ink-soft);padding:11px 16px;cursor:pointer;}
+.export-item:hover{background:var(--accent-wash);color:var(--accent-ink);}
 .page-failed{background:var(--brick-wash);border:1px solid #e6c6bf;border-radius:10px;padding:18px 20px;font-family:var(--ui);}
 .page-failed .ftitle{color:var(--brick);font-weight:600;margin-bottom:5px;font-size:14px}
 .page-failed .fmsg{color:var(--ink-soft);font-size:12.5px;margin-bottom:12px;word-break:break-word}

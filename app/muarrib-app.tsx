@@ -5,6 +5,9 @@ import Script from 'next/script';
 import DOMPurify from 'dompurify';
 import { escapeHtml } from '@/lib/sanitize';
 import { findMissingNumbers } from '@/lib/number-guard';
+import { Packer } from 'docx';
+import { buildTranslationDoc } from '@/lib/export-docx';
+import { buildTranslationHtml } from '@/lib/export-html';
 import type { Block, TableCell as BlockTableCell } from '@/lib/types';
 
 // ─── Model output is untrusted: escape HTML-significant characters, then run
@@ -109,6 +112,16 @@ function blocksToText(blocks: Block[]): string {
     if (b.rows) for (const row of b.rows) parts.push(...row.map(cellText));
   }
   return parts.join(' ');
+}
+
+// ─── Utility: trigger a browser download for a Blob
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ─── Utility: split a JPEG data-URL vertically into top and bottom halves
@@ -458,6 +471,8 @@ export default function MuarribApp() {
   const [label, setLabel] = useState<{ fileName: string; from: number; to: number } | null>(null);
 
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
 
   // Advanced / BYOK state (collapsed by default — default mode needs no key)
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -500,6 +515,40 @@ export default function MuarribApp() {
     setPages([]);
     setShowOriginal(false);
     setLabel(null);
+  }, []);
+
+  // ─── Close the export menu on outside click
+  useEffect(() => {
+    if (!exportOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) setExportOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [exportOpen]);
+
+  // ─── All successfully-translated pages' blocks, in page order
+  const allBlocks = pages
+    .filter(p => p.status === 'done' && p.blocks != null)
+    .flatMap(p => p.blocks as Block[]);
+
+  const exportBaseName = (fileName.replace(/\.[^./]+$/, '') || 'translation');
+
+  const exportWord = useCallback(async () => {
+    const blob = await Packer.toBlob(buildTranslationDoc(allBlocks, { title: fileName, showEnglishTerms: showEnglish }));
+    downloadBlob(blob, `${exportBaseName}-ar.docx`);
+    setExportOpen(false);
+  }, [allBlocks, fileName, showEnglish, exportBaseName]);
+
+  const exportHtmlFile = useCallback(() => {
+    const html = buildTranslationHtml(allBlocks, { title: fileName, showEnglishTerms: showEnglish });
+    downloadBlob(new Blob([html], { type: 'text/html' }), `${exportBaseName}-ar.html`);
+    setExportOpen(false);
+  }, [allBlocks, fileName, showEnglish, exportBaseName]);
+
+  const exportPdf = useCallback(() => {
+    setExportOpen(false);
+    window.print();
   }, []);
 
   // ─── BYOK key verification
@@ -1030,6 +1079,22 @@ export default function MuarribApp() {
           <button className="btn ghost" onClick={() => window.print()}>
             Save / Print PDF
           </button>
+          <div className="export-menu" ref={exportRef}>
+            <button
+              className="btn ghost"
+              disabled={allBlocks.length === 0}
+              onClick={() => setExportOpen(v => !v)}
+            >
+              تنزيل / Export
+            </button>
+            {exportOpen && (
+              <div className="export-dropdown">
+                <button className="export-item" onClick={exportWord}>Word (.docx)</button>
+                <button className="export-item" onClick={exportHtmlFile}>صفحة ويب (.html)</button>
+                <button className="export-item" onClick={exportPdf}>طباعة PDF</button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* ── Page cards ── */}

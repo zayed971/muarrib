@@ -9,6 +9,9 @@ import { Packer } from 'docx';
 import { buildTranslationDoc } from '@/lib/export-docx';
 import { buildTranslationHtml } from '@/lib/export-html';
 import type { Block, TableCell as BlockTableCell } from '@/lib/types';
+import { t, dir, DEFAULT_LOCALE, otherLocale, type Locale } from '@/lib/i18n';
+import { DISCLAIMER } from '@/lib/legal';
+import Link from 'next/link';
 
 // ─── Model output is untrusted: escape HTML-significant characters, then run
 // the assembled markup through DOMPurify as a second layer before it's used
@@ -159,6 +162,7 @@ async function callProxy(
   pageNum: number,
   provider: Provider,
   apiKey: string,
+  locale: Locale,
 ): Promise<{ blocks: Block[]; truncated: boolean; parseFailed: boolean }> {
   const imageBase64 = dataUrl.split(',')[1];
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -176,7 +180,7 @@ async function callProxy(
     parseFailed?: boolean;
   } = await res.json();
   if (!res.ok || data.error) {
-    const e = new Error(data.error?.en ?? `HTTP ${res.status}`);
+    const e = new Error(data.error?.[locale] ?? `HTTP ${res.status}`);
     if (data.code === 'RATE_LIMITED') (e as Error & { rateLimited: boolean }).rateLimited = true;
     if (data.code === 'VERIFICATION') (e as Error & { verificationFailed: boolean }).verificationFailed = true;
     throw e;
@@ -211,6 +215,7 @@ async function processOnePage(
   doc: PdfDocument,
   provider: Provider,
   apiKey: string,
+  locale: Locale,
   imageCache: Map<number, string>,
   onUpdate: (num: number, patch: Partial<PageState>) => void,
   onRateLimit?: () => void,
@@ -224,7 +229,7 @@ async function processOnePage(
       onUpdate(num, { image });
     }
 
-    const { blocks, truncated, parseFailed } = await callProxy(image, num, provider, apiKey);
+    const { blocks, truncated, parseFailed } = await callProxy(image, num, provider, apiKey, locale);
 
     let finalBlocks: Block[];
     if (truncated || parseFailed) {
@@ -232,8 +237,8 @@ async function processOnePage(
       // halves, translate each separately, and merge in reading order
       const [topUrl, botUrl] = await splitImageVertically(image);
       const [topResult, botResult] = await Promise.all([
-        callProxy(topUrl, num, provider, apiKey),
-        callProxy(botUrl, num, provider, apiKey),
+        callProxy(topUrl, num, provider, apiKey, locale),
+        callProxy(botUrl, num, provider, apiKey, locale),
       ]);
       finalBlocks = [...topResult.blocks, ...botResult.blocks];
     } else {
@@ -274,7 +279,7 @@ function cellHtml(cell: TableCell, showEnglish: boolean): string {
   return sanitizeHtml(html);
 }
 
-function BlockItem({ block, showEnglish }: { block: Block; showEnglish: boolean }) {
+function BlockItem({ block, showEnglish, locale }: { block: Block; showEnglish: boolean; locale: Locale }) {
   let inner: React.ReactNode;
 
   switch (block.type) {
@@ -374,7 +379,7 @@ function BlockItem({ block, showEnglish }: { block: Block; showEnglish: boolean 
   if (block.lowconf) {
     return (
       <div className="lowconf">
-        <span className="lc-tag">غير مؤكد — راجع الأصل · uncertain, check source</span>
+        <span className="lc-tag">{t('uncertain', locale)}</span>
         {inner}
       </div>
     );
@@ -382,7 +387,7 @@ function BlockItem({ block, showEnglish }: { block: Block; showEnglish: boolean 
   return <>{inner}</>;
 }
 
-function BlocksView({ blocks, showEnglish }: { blocks: Block[]; showEnglish: boolean }) {
+function BlocksView({ blocks, showEnglish, locale }: { blocks: Block[]; showEnglish: boolean; locale: Locale }) {
   if (!blocks.length) {
     return (
       <p className="b-cap">
@@ -392,14 +397,14 @@ function BlocksView({ blocks, showEnglish }: { blocks: Block[]; showEnglish: boo
   }
   return (
     <>
-      {blocks.map((b, i) => <BlockItem key={i} block={b} showEnglish={showEnglish} />)}
+      {blocks.map((b, i) => <BlockItem key={i} block={b} showEnglish={showEnglish} locale={locale} />)}
     </>
   );
 }
 
 // ─── Key field: input + Confirm/locked states for BYOK verification
 function KeyField({
-  placeholder, value, status, error, running, linkHref, linkLabel, onInput, onConfirm, onChangeKey,
+  placeholder, value, status, error, running, linkHref, linkLabel, onInput, onConfirm, onChangeKey, locale,
 }: {
   placeholder: string;
   value: string;
@@ -411,6 +416,7 @@ function KeyField({
   onInput: (v: string) => void;
   onConfirm: () => void;
   onChangeKey: () => void;
+  locale: Locale;
 }) {
   const verified = status === 'verified';
   const verifying = status === 'verifying';
@@ -429,9 +435,9 @@ function KeyField({
         />
         {verified ? (
           <>
-            <span className="key-active">✓ Key active</span>
+            <span className="key-active">{t('keyActive', locale)}</span>
             <button type="button" className="link-btn" onClick={onChangeKey} disabled={running}>
-              Change
+              {t('changeKey', locale)}
             </button>
           </>
         ) : (
@@ -441,7 +447,7 @@ function KeyField({
             onClick={onConfirm}
             disabled={running || !value.trim() || verifying}
           >
-            {verifying ? 'Checking…' : 'Confirm'}
+            {verifying ? (locale === 'ar' ? 'جارٍ التحقق…' : 'Checking…') : t('confirmKey', locale)}
           </button>
         )}
         <a className="key-link" href={linkHref} target="_blank" rel="noopener noreferrer">{linkLabel}</a>
@@ -474,6 +480,10 @@ export default function MuarribApp() {
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
 
+  // Interface language (independent of the always-Arabic translation output)
+  const [locale, setLocale] = useState<Locale>(DEFAULT_LOCALE);
+  const [disclaimerDismissed, setDisclaimerDismissed] = useState(false);
+
   // Advanced / BYOK state (collapsed by default — default mode needs no key)
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [byokProvider, setByokProvider] = useState<Provider>('gemini');
@@ -499,6 +509,19 @@ export default function MuarribApp() {
   useEffect(() => {
     sessionStorage.setItem('muarrib-show-english', String(showEnglish));
   }, [showEnglish]);
+
+  // ─── Remember the interface language for this browser session, and keep
+  // <html lang/dir> in sync (set imperatively — RootLayout is a server component
+  // and can't see this client-side state).
+  useEffect(() => {
+    const saved = sessionStorage.getItem('muarrib-locale');
+    if (saved === 'ar' || saved === 'en') setLocale(saved);
+  }, []);
+  useEffect(() => {
+    sessionStorage.setItem('muarrib-locale', locale);
+    document.documentElement.lang = locale;
+    document.documentElement.dir = dir(locale);
+  }, [locale]);
 
   // ─── Helpers
   const clamp = useCallback(() => {
@@ -711,11 +734,11 @@ export default function MuarribApp() {
     const spacing = prov === 'gemini' ? GEMINI_SPACING_MS : 0;
 
     await runPool(nums, limit, num =>
-      processOnePage(num, doc, prov, key, cache, updatePage, () => setRateLimitHit(true), handleVerificationFailed),
+      processOnePage(num, doc, prov, key, locale, cache, updatePage, () => setRateLimitHit(true), handleVerificationFailed),
       spacing,
     );
     setRunning(false);
-  }, [running, pdfDoc, byokKey, byokProvider, keyStatus, verified, fileName, clamp, updatePage, handleVerificationFailed]);
+  }, [running, pdfDoc, byokKey, byokProvider, keyStatus, verified, fileName, locale, clamp, updatePage, handleVerificationFailed]);
 
   const retryPage = useCallback(async (num: number) => {
     if (!pdfDoc) return;
@@ -725,8 +748,8 @@ export default function MuarribApp() {
     const prov: Provider = usByok ? byokProvider : 'anthropic';
     const key = usByok ? byokKey.trim() : '';
     updatePage(num, { status: 'pending', error: null, numberWarning: null });
-    await processOnePage(num, pdfDoc, prov, key, imageCache.current, updatePage, () => setRateLimitHit(true), handleVerificationFailed);
-  }, [pdfDoc, byokKey, byokProvider, keyStatus, updatePage, handleVerificationFailed]);
+    await processOnePage(num, pdfDoc, prov, key, locale, imageCache.current, updatePage, () => setRateLimitHit(true), handleVerificationFailed);
+  }, [pdfDoc, byokKey, byokProvider, keyStatus, locale, updatePage, handleVerificationFailed]);
 
   // ─── Derived
   const usingByok = keyStatus === 'verified';
@@ -740,8 +763,12 @@ export default function MuarribApp() {
   const progressText = pages.length === 0
     ? ''
     : finished < pages.length
-    ? `Reading page ${finished} of ${pages.length}…`
-    : `Done — ${pages.length - failed} of ${pages.length} page${pages.length === 1 ? '' : 's'} translated${failed ? ` · ${failed} failed (retry below)` : ''}.`;
+    ? (locale === 'ar'
+        ? `${t('readingPage', locale)} ${finished} من ${pages.length}…`
+        : `${t('readingPage', locale)} ${finished} of ${pages.length}…`)
+    : (locale === 'ar'
+        ? `تم — تُرجمت ${pages.length - failed} من ${pages.length} صفحة${failed ? ` · فشلت ${failed} (أعِد المحاولة أدناه)` : ''}.`
+        : `Done — ${pages.length - failed} of ${pages.length} page${pages.length === 1 ? '' : 's'} translated${failed ? ` · ${failed} failed (retry below)` : ''}.`);
 
   // ─── Render
   return (
@@ -784,20 +811,26 @@ export default function MuarribApp() {
             <span className="mark">مُعرِّب</span>
             <h1><span className="latin-name">Muʿarrib</span></h1>
             <button type="button" className="about-link" onClick={() => setAboutOpen(true)}>
-              <span aria-hidden="true">ⓘ</span> About
+              <span aria-hidden="true">ⓘ</span> {t('about', locale)}
+            </button>
+            <button
+              type="button"
+              className="about-link lang-toggle"
+              onClick={() => setLocale(otherLocale(locale))}
+            >
+              <span aria-hidden="true">🌐</span> {t('switchLanguage', locale)}
             </button>
           </div>
           <p className="tagline">
-            English PDFs, read in real Arabic — letters connected, direction correct, tables rebuilt.
-            The kind a vision model reads the way a person does.
+            {locale === 'ar'
+              ? 'ملفات PDF إنجليزية، تُقرأ بعربية حقيقية — حروف متصلة، اتجاه صحيح، جداول مُعاد بناؤها. كما يقرؤها إنسان، بمساعدة نموذج رؤية.'
+              : 'English PDFs, read in real Arabic — letters connected, direction correct, tables rebuilt. The kind a vision model reads the way a person does.'}
           </p>
           <div className="how">
-            {[
-              'Upload an English PDF',
-              'Choose pages',
-              'Translate — the AI reads each page as an image',
-              'Read, compare to the original, or save',
-            ].map((s, i) => (
+            {(locale === 'ar'
+              ? ['ارفع ملف PDF إنجليزي', 'اختر الصفحات', 'تَرجِم — يقرأ الذكاء الاصطناعي كل صفحة كصورة', 'اقرأ، قارِن بالأصل، أو احفظ']
+              : ['Upload an English PDF', 'Choose pages', 'Translate — the AI reads each page as an image', 'Read, compare to the original, or save']
+            ).map((s, i) => (
               <span key={i} className="step">
                 <span className="n">{i + 1}</span> {s}
               </span>
@@ -830,8 +863,11 @@ export default function MuarribApp() {
               <path d="m9 15 3-3 3 3" />
             </svg>
           </div>
-          <div className="big">Drop an English PDF here</div>
-          <div className="sub">or click to choose — stays in your browser until you translate</div>
+          <div className="big">{t('dropPdf', locale)}</div>
+          <div className="sub">
+            {t('orClick', locale)}
+            {locale === 'ar' ? ' — يبقى في متصفحك حتى تبدأ الترجمة' : ' — stays in your browser until you translate'}
+          </div>
           {loadError && <div className="err">{loadError}</div>}
         </div>
         <input
@@ -856,13 +892,13 @@ export default function MuarribApp() {
               <div className="meta">{numPages} page{numPages === 1 ? '' : 's'} · {fileSize}</div>
             </div>
             <div className="spacer" />
-            <button className="btn ghost" onClick={reset} disabled={running}>New file</button>
+            <button className="btn ghost" onClick={reset} disabled={running}>{t('newFile', locale)}</button>
           </div>
           <div className="ctrl-body">
             <div className="field">
-              <label>Pages to translate</label>
+              <label>{t('pagesToTranslate', locale)}</label>
               <div className="range-inputs">
-                <span>from</span>
+                <span>{t('from', locale)}</span>
                 <input
                   type="number"
                   value={fromPage}
@@ -872,7 +908,7 @@ export default function MuarribApp() {
                   onBlur={() => { const r = clamp(); setFromPage(r.from); setToPage(r.to); }}
                   disabled={running}
                 />
-                <span>to</span>
+                <span>{t('to', locale)}</span>
                 <input
                   type="number"
                   value={toPage}
@@ -885,9 +921,17 @@ export default function MuarribApp() {
               </div>
             </div>
             <div className="estimate">
-              <b>{range.count}</b> page{range.count === 1 ? '' : 's'} → <b>{range.count}</b> AI call{range.count === 1 ? '' : 's'}.
+              {locale === 'ar' ? (
+                <><b>{range.count}</b> صفحة ← <b>{range.count}</b> طلب{range.count === 1 ? '' : 'ات'} للذكاء الاصطناعي.</>
+              ) : (
+                <><b>{range.count}</b> page{range.count === 1 ? '' : 's'} → <b>{range.count}</b> AI call{range.count === 1 ? '' : 's'}.</>
+              )}
               {range.count > WARN_ABOVE && (
-                <span className="warn"> Large jobs are slower &amp; cost more — try a chapter first.</span>
+                <span className="warn">
+                  {locale === 'ar'
+                    ? ' المهام الكبيرة أبطأ وأعلى تكلفة — جرّب فصلاً واحداً أولاً.'
+                    : ' Large jobs are slower & cost more — try a chapter first.'}
+                </span>
               )}
             </div>
             <div className="spacer" />
@@ -896,18 +940,22 @@ export default function MuarribApp() {
               onClick={run}
               disabled={running || !pdfDoc || blockedByUnverifiedKey || blockedByVerification}
             >
-              {running ? 'Translating…' : 'Translate to Arabic'}
+              {running ? t('translating', locale) : t('translate', locale)}
             </button>
             {blockedByUnverifiedKey && (
               <div className="key-block-hint">
                 {keyStatus === 'verifying'
-                  ? 'Verifying your key…'
-                  : 'Confirm your API key in Advanced settings below to translate with it — or clear it to use the free default.'}
+                  ? (locale === 'ar' ? 'جارٍ التحقق من مفتاحك…' : 'Verifying your key…')
+                  : (locale === 'ar'
+                      ? 'أكِّد مفتاح API في الإعدادات المتقدمة أدناه لاستخدامه — أو أزِله لاستخدام الإعداد المجاني الافتراضي.'
+                      : 'Confirm your API key in Advanced settings below to translate with it — or clear it to use the free default.')}
               </div>
             )}
             {!blockedByUnverifiedKey && blockedByVerification && (
               <div className="key-block-hint">
-                {verifying ? 'Verifying…' : 'Complete the security check above to translate.'}
+                {verifying
+                  ? (locale === 'ar' ? 'جارٍ التحقق…' : 'Verifying…')
+                  : t('verifyHuman', locale)}
               </div>
             )}
           </div>
@@ -922,14 +970,23 @@ export default function MuarribApp() {
         {/* ── Rate-limit banner ── */}
         {rateLimitHit && !usingByok && (
           <div className="rate-limit-banner">
-            <b>Free daily limit reached.</b> You&apos;ve hit today&apos;s free-page limit on the shared key.{' '}
-            <button
-              className="link-btn"
-              onClick={() => { setAdvancedOpen(true); }}
-            >
-              Add your own API key
-            </button>{' '}
-            in Advanced Settings below to keep going, or come back tomorrow.
+            {locale === 'ar' ? (
+              <>
+                <b>تم الوصول إلى الحد اليومي المجاني.</b> لقد استهلكت حصتك المجانية من الصفحات على المفتاح المشترك لهذا اليوم.{' '}
+                <button className="link-btn" onClick={() => setAdvancedOpen(true)}>
+                  أضف مفتاح API الخاص بك
+                </button>{' '}
+                في الإعدادات المتقدمة أدناه للمتابعة، أو عُد غداً.
+              </>
+            ) : (
+              <>
+                <b>Free daily limit reached.</b> You&apos;ve hit today&apos;s free-page limit on the shared key.{' '}
+                <button className="link-btn" onClick={() => setAdvancedOpen(true)}>
+                  Add your own API key
+                </button>{' '}
+                in Advanced Settings below to keep going, or come back tomorrow.
+              </>
+            )}
           </div>
         )}
 
@@ -942,13 +999,14 @@ export default function MuarribApp() {
             disabled={running}
           >
             <span className="adv-arrow">{advancedOpen ? '▲' : '▼'}</span>
-            Advanced — use your own API key
+            {locale === 'ar' ? 'متقدّم — استخدم مفتاح API الخاص بك' : 'Advanced — use your own API key'}
           </button>
           {advancedOpen && (
             <div className="advanced-content">
               <p className="adv-note">
-                Your key is sent per-request and never stored on our servers.
-                Using your own key bypasses the daily free-page limit and lets you choose your AI provider.
+                {locale === 'ar'
+                  ? 'يُرسَل مفتاحك مع كل طلب ولا يُخزَّن أبداً على خوادمنا. استخدام مفتاحك الخاص يتجاوز الحد اليومي المجاني ويتيح لك اختيار مزوّد الذكاء الاصطناعي.'
+                  : 'Your key is sent per-request and never stored on our servers. Using your own key bypasses the daily free-page limit and lets you choose your AI provider.'}
               </p>
               <div className="adv-providers">
                 <div className="provider-row">
@@ -962,27 +1020,29 @@ export default function MuarribApp() {
                       disabled={running}
                     />
                     <div>
-                      <div className="prov-name">Gemini — free, just a Google account</div>
-                      <div className="prov-note">No credit card required. Get a key in 30 seconds.</div>
+                      <div className="prov-name">{t('useGeminiFree', locale)}</div>
+                      <div className="prov-note">
+                        {locale === 'ar' ? 'لا حاجة لبطاقة ائتمان. احصل على مفتاح في 30 ثانية.' : 'No credit card required. Get a key in 30 seconds.'}
+                      </div>
                     </div>
                   </label>
                   {byokProvider === 'gemini' && (
                     <div className="key-expand">
                       <KeyField
-                        placeholder="Paste your Gemini API key (AIza…)"
+                        placeholder={`${t('apiKeyPlaceholder', locale)} (AIza…)`}
                         value={byokKey}
                         status={keyStatus}
                         error={keyError}
                         running={running}
                         linkHref="https://aistudio.google.com/apikey"
-                        linkLabel="Get a free key →"
+                        linkLabel={`${t('getGeminiKey', locale)} →`}
                         onInput={handleKeyInput}
                         onConfirm={confirmKey}
                         onChangeKey={changeKey}
+                        locale={locale}
                       />
                       <div className="warn-note">
-                        The free Gemini tier may use your prompts to improve Google&apos;s models.
-                        <strong> Not for confidential or patient documents.</strong>
+                        {t('geminiPrivacyWarning', locale)}
                       </div>
                     </div>
                   )}
@@ -998,23 +1058,26 @@ export default function MuarribApp() {
                       disabled={running}
                     />
                     <div>
-                      <div className="prov-name">Anthropic — Claude, not used for training</div>
-                      <div className="prov-note">Best for medical, legal, and research documents.</div>
+                      <div className="prov-name">{t('useAnthropicKey', locale)}</div>
+                      <div className="prov-note">
+                        {locale === 'ar' ? 'الأفضل للمستندات الطبية والقانونية والبحثية.' : 'Best for medical, legal, and research documents.'}
+                      </div>
                     </div>
                   </label>
                   {byokProvider === 'anthropic' && (
                     <div className="key-expand">
                       <KeyField
-                        placeholder="Paste your Anthropic API key (sk-ant-…)"
+                        placeholder={`${t('apiKeyPlaceholder', locale)} (sk-ant-…)`}
                         value={byokKey}
                         status={keyStatus}
                         error={keyError}
                         running={running}
                         linkHref="https://console.anthropic.com/settings/keys"
-                        linkLabel="Get a key →"
+                        linkLabel={locale === 'ar' ? 'احصل على مفتاح ←' : 'Get a key →'}
                         onInput={handleKeyInput}
                         onConfirm={confirmKey}
                         onChangeKey={changeKey}
+                        locale={locale}
                       />
                     </div>
                   )}
@@ -1022,7 +1085,9 @@ export default function MuarribApp() {
               </div>
               {usingByok && (
                 <div className="adv-active-note">
-                  Using your {byokProvider === 'gemini' ? 'Gemini' : 'Anthropic'} key · daily limit bypassed.
+                  {locale === 'ar'
+                    ? `يُستخدم مفتاح ${byokProvider === 'gemini' ? 'Gemini' : 'Anthropic'} الخاص بك · تم تجاوز الحد اليومي.`
+                    : `Using your ${byokProvider === 'gemini' ? 'Gemini' : 'Anthropic'} key · daily limit bypassed.`}
                 </div>
               )}
             </div>
@@ -1031,12 +1096,12 @@ export default function MuarribApp() {
 
         {/* ── Privacy note ── */}
         <p className="privacy-note">
-          <b>Privacy:</b> Your PDF never leaves your browser as a file. Only individual page <b>images</b> are
-          sent to the AI, only to be translated. Nothing is stored or logged on our servers.
+          <b>{locale === 'ar' ? 'الخصوصية:' : 'Privacy:'}</b> {t('privacyNote', locale)}
+          {' '}
           {usingByok && byokProvider === 'gemini' ? (
-            <> When using your Gemini key, the <b>free tier may use images to improve Google&apos;s models</b> — not for confidential documents.</>
+            <>{t('geminiPrivacyWarning', locale)}</>
           ) : (
-            <> The default free tier uses Claude (Anthropic) — paid tiers are not used for model training, making it suitable for medical, legal, and research documents.</>
+            <>{t('defaultProviderNote', locale)}</>
           )}
         </p>
 
@@ -1055,12 +1120,27 @@ export default function MuarribApp() {
           </div>
         </div>
 
+        {/* ── Disclaimer banner ── */}
+        {pages.length > 0 && !disclaimerDismissed && (
+          <div className="disclaimer-banner">
+            <span>{DISCLAIMER[locale]}</span>
+            <button
+              type="button"
+              className="disclaimer-close"
+              onClick={() => setDisclaimerDismissed(true)}
+              aria-label={t('dismiss', locale)}
+            >
+              ×
+            </button>
+          </div>
+        )}
+
         {/* ── Results bar ── */}
         <div className={`results-bar${pages.length > 0 ? ' show' : ''}`}>
           <span className="title">
             {label?.fileName}
             {label && (
-              <span className="muted"> · pages {label.from}–{label.to}</span>
+              <span className="muted"> · {t('pageLabel', locale)} {label.from}–{label.to}</span>
             )}
           </span>
           <div className="spacer" />
@@ -1068,16 +1148,16 @@ export default function MuarribApp() {
             className={`btn ghost${showEnglish ? ' on' : ''}`}
             onClick={() => setShowEnglish(v => !v)}
           >
-            {showEnglish ? 'Hide English terms' : 'Show English terms'}
+            {showEnglish ? t('hideEnglishTerms', locale) : t('showEnglishTerms', locale)}
           </button>
           <button
             className={`btn ghost${showOriginal ? ' on' : ''}`}
             onClick={() => setShowOriginal(v => !v)}
           >
-            {showOriginal ? 'Hide original' : 'Show original'}
+            {showOriginal ? t('hideOriginal', locale) : t('showOriginal', locale)}
           </button>
           <button className="btn ghost" onClick={() => window.print()}>
-            Save / Print PDF
+            {t('exportPdf', locale)}
           </button>
           <div className="export-menu" ref={exportRef}>
             <button
@@ -1085,13 +1165,13 @@ export default function MuarribApp() {
               disabled={allBlocks.length === 0}
               onClick={() => setExportOpen(v => !v)}
             >
-              تنزيل / Export
+              {t('exportLabel', locale)}
             </button>
             {exportOpen && (
               <div className="export-dropdown">
-                <button className="export-item" onClick={exportWord}>Word (.docx)</button>
-                <button className="export-item" onClick={exportHtmlFile}>صفحة ويب (.html)</button>
-                <button className="export-item" onClick={exportPdf}>طباعة PDF</button>
+                <button className="export-item" onClick={exportWord}>{t('exportWord', locale)}</button>
+                <button className="export-item" onClick={exportHtmlFile}>{t('exportHtml', locale)}</button>
+                <button className="export-item" onClick={exportPdf}>{t('exportPdf', locale)}</button>
               </div>
             )}
           </div>
@@ -1108,7 +1188,7 @@ export default function MuarribApp() {
               <div className="page-tag">صفحة {p.num} · Page {p.num}</div>
               {p.numberWarning && p.numberWarning.length > 0 && (
                 <div className="number-warning">
-                  تحقق من الأرقام · Numbers to verify against the original: {p.numberWarning.join(', ')}
+                  {t('numberWarning', locale)}: {p.numberWarning.join(', ')}
                 </div>
               )}
               <div className="card-grid">
@@ -1117,17 +1197,19 @@ export default function MuarribApp() {
                   <div className="doc">
                     {p.status === 'pending' && <div className="skeleton" />}
                     {p.status === 'done' && p.blocks != null && (
-                      <BlocksView blocks={p.blocks} showEnglish={showEnglish} />
+                      <BlocksView blocks={p.blocks} showEnglish={showEnglish} locale={locale} />
                     )}
                     {p.status === 'failed' && (
                       <div className="page-failed">
-                        <div className="ftitle">Couldn&apos;t translate page {p.num}</div>
-                        <div className="fmsg">{p.error ?? 'Unknown error'}</div>
+                        <div className="ftitle">
+                          {locale === 'ar' ? `تعذّرت ترجمة الصفحة ${p.num}` : `Couldn't translate page ${p.num}`}
+                        </div>
+                        <div className="fmsg">{p.error ?? (locale === 'ar' ? 'خطأ غير معروف' : 'Unknown error')}</div>
                         <button
                           className="btn ghost"
                           onClick={() => retryPage(p.num)}
                         >
-                          Retry this page
+                          {t('retry', locale)}
                         </button>
                       </div>
                     )}
@@ -1144,24 +1226,41 @@ export default function MuarribApp() {
           ))}
         </div>
 
+        {/* ── Footer ── */}
+        <footer className="site-footer">
+          <Link href="/privacy">{t('privacy', locale)}</Link>
+          <span className="footer-sep">·</span>
+          <Link href="/terms">{t('terms', locale)}</Link>
+        </footer>
+
       </div>
 
       {aboutOpen && (
         <div className="about-overlay" onClick={() => setAboutOpen(false)}>
           <div className="about-panel" onClick={e => e.stopPropagation()}>
-            <button type="button" className="about-close" onClick={() => setAboutOpen(false)} aria-label="Close">×</button>
-            <h2>About Muʿarrib</h2>
+            <button type="button" className="about-close" onClick={() => setAboutOpen(false)} aria-label={t('dismiss', locale)}>×</button>
+            <h2>{locale === 'ar' ? 'عن مُعرِّب' : 'About Muʿarrib'}</h2>
+            {locale === 'ar' ? (
+              <p>
+                تُعرَض كل صفحة كصورة ويقرؤها نموذج رؤية — فلا يدخل أي ترميز نص PDF تالف خط الأنابيب.
+                النتيجة عرض قراءة عربي مُعاد تنسيقه: جداول مُعاد بناؤها بالعربية، وأشكال تُوصَف مع
+                إظهار الرسم الأصلي عبر «إظهار الأصل»، وأي شيء غير واضح أو غير مؤكد يُعلَّم بـ{' '}
+                <span style={{ color: 'var(--amber)' }}>غير مؤكد</span> لتتحقق منه في المصدر.
+              </p>
+            ) : (
+              <p>
+                Each page is rendered to an image and read by a vision model — so corrupted PDF text
+                encoding never enters the pipeline. Output is a clean reflowed reading view: tables
+                rebuilt in Arabic, figures described with the original graphic shown under
+                &quot;Show original&quot;, and anything blurry or uncertain marked{' '}
+                <span style={{ color: 'var(--amber)' }}>غير مؤكد</span> so you can check it against the source.
+              </p>
+            )}
             <p>
-              Each page is rendered to an image and read by a vision model — so corrupted PDF text
-              encoding never enters the pipeline. Output is a clean reflowed reading view: tables
-              rebuilt in Arabic, figures described with the original graphic shown under
-              &quot;Show original&quot;, and anything blurry or uncertain marked{' '}
-              <span style={{ color: 'var(--amber)' }}>غير مؤكد</span> so you can check it against the source.
+              <b>{locale === 'ar' ? 'الخصوصية:' : 'Privacy:'}</b> {t('privacyNote', locale)}
             </p>
-            <p>
-              <b>Privacy:</b> Your PDF never leaves your browser as a file — only individual page
-              images are sent to the AI you choose, only to be translated, and nothing is stored or
-              logged on our servers.
+            <p className="about-legal-links">
+              <Link href="/privacy">{t('privacy', locale)}</Link> · <Link href="/terms">{t('terms', locale)}</Link>
             </p>
           </div>
         </div>

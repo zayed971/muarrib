@@ -4,7 +4,8 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 import Script from 'next/script';
 import DOMPurify from 'dompurify';
 import { escapeHtml } from '@/lib/sanitize';
-import type { Block } from '@/lib/types';
+import { findMissingNumbers } from '@/lib/number-guard';
+import type { Block, TableCell as BlockTableCell } from '@/lib/types';
 
 // ─── Model output is untrusted: escape HTML-significant characters, then run
 // the assembled markup through DOMPurify as a second layer before it's used
@@ -17,9 +18,11 @@ function sanitizeHtml(html: string): string {
 
 // ─── pdf.js minimal types (CDN global)
 interface PdfViewport { width: number; height: number; }
+interface PdfTextContent { items: Array<{ str?: string }>; }
 interface PdfPage {
   getViewport(o: { scale: number }): PdfViewport;
   render(o: { canvasContext: CanvasRenderingContext2D; viewport: PdfViewport }): { promise: Promise<void> };
+  getTextContent(): Promise<PdfTextContent>;
 }
 interface PdfDocument { numPages: number; getPage(n: number): Promise<PdfPage>; }
 declare global {
@@ -50,6 +53,8 @@ interface PageState {
   image: string | null;
   blocks: Block[] | null;
   error: string | null;
+  /** Numbers found in the page's text layer but missing from the translation. */
+  numberWarning: string[] | null;
 }
 
 // ─── Constants
@@ -82,6 +87,28 @@ async function renderPageImage(doc: PdfDocument, num: number): Promise<string> {
   const url = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
   canvas.width = canvas.height = 0; // release memory
   return url;
+}
+
+// ─── Utility: extract the PDF's text-layer for a page (English source text).
+// Used as the ground truth for the number cross-check below.
+async function getPageText(doc: PdfDocument, num: number): Promise<string> {
+  const page = await doc.getPage(num);
+  const content = await page.getTextContent();
+  return content.items.map(it => it.str ?? '').join(' ');
+}
+
+// ─── Utility: flatten a translated block array into one string for the number
+// cross-check (table cells, list items, headings, etc.).
+function blocksToText(blocks: Block[]): string {
+  const cellText = (cell: BlockTableCell): string => (typeof cell === 'string' ? cell : cell.ar ?? '');
+  const parts: string[] = [];
+  for (const b of blocks) {
+    if (b.ar) parts.push(b.ar);
+    if (b.content) parts.push(b.content);
+    if (b.items) parts.push(...b.items);
+    if (b.rows) for (const row of b.rows) parts.push(...row.map(cellText));
+  }
+  return parts.join(' ');
 }
 
 // ─── Utility: split a JPEG data-URL vertically into top and bottom halves
@@ -186,6 +213,7 @@ async function processOnePage(
 
     const { blocks, truncated, parseFailed } = await callProxy(image, num, provider, apiKey);
 
+    let finalBlocks: Block[];
     if (truncated || parseFailed) {
       // Hit the token limit or returned unparseable JSON — split into top/bottom
       // halves, translate each separately, and merge in reading order
@@ -194,14 +222,23 @@ async function processOnePage(
         callProxy(topUrl, num, provider, apiKey),
         callProxy(botUrl, num, provider, apiKey),
       ]);
-      onUpdate(num, {
-        status: 'done',
-        blocks: [...topResult.blocks, ...botResult.blocks],
-        error: null,
-      });
+      finalBlocks = [...topResult.blocks, ...botResult.blocks];
     } else {
-      onUpdate(num, { status: 'done', blocks, error: null });
+      finalBlocks = blocks;
     }
+
+    // Number cross-check: flag numbers present in the PDF's text layer but
+    // missing from the translation, so the user can verify against the original.
+    let numberWarning: string[] | null = null;
+    try {
+      const sourceText = await getPageText(doc, num);
+      const { ok, missing } = findMissingNumbers(sourceText, blocksToText(finalBlocks));
+      if (!ok) numberWarning = missing;
+    } catch {
+      // text-layer extraction is best-effort — never block on it
+    }
+
+    onUpdate(num, { status: 'done', blocks: finalBlocks, error: null, numberWarning });
   } catch (err) {
     if ((err as { rateLimited?: boolean }).rateLimited) onRateLimit?.();
     if ((err as { verificationFailed?: boolean }).verificationFailed) onVerificationFailed?.();
@@ -611,7 +648,7 @@ export default function MuarribApp() {
     const nums = Array.from({ length: count }, (_, i) => from + i);
 
     imageCache.current = new Map();
-    setPages(nums.map(n => ({ num: n, status: 'pending', image: null, blocks: null, error: null })));
+    setPages(nums.map(n => ({ num: n, status: 'pending', image: null, blocks: null, error: null, numberWarning: null })));
     setShowOriginal(false);
     setRunning(true);
     setLabel({ fileName, from, to });
@@ -638,7 +675,7 @@ export default function MuarribApp() {
     const usByok = keyStatus === 'verified';
     const prov: Provider = usByok ? byokProvider : 'anthropic';
     const key = usByok ? byokKey.trim() : '';
-    updatePage(num, { status: 'pending', error: null });
+    updatePage(num, { status: 'pending', error: null, numberWarning: null });
     await processOnePage(num, pdfDoc, prov, key, imageCache.current, updatePage, () => setRateLimitHit(true), handleVerificationFailed);
   }, [pdfDoc, byokKey, byokProvider, keyStatus, updatePage, handleVerificationFailed]);
 
@@ -1004,6 +1041,11 @@ export default function MuarribApp() {
               style={{ animationDelay: `${idx * 0.04}s` }}
             >
               <div className="page-tag">صفحة {p.num} · Page {p.num}</div>
+              {p.numberWarning && p.numberWarning.length > 0 && (
+                <div className="number-warning">
+                  تحقق من الأرقام · Numbers to verify against the original: {p.numberWarning.join(', ')}
+                </div>
+              )}
               <div className="card-grid">
                 <div className="card-trans">
                   <div className="col-label">الترجمة · Arabic</div>

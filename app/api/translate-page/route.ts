@@ -5,6 +5,8 @@ import type { TranslationProvider } from '@/lib/providers/types';
 import { reliableCall } from '@/lib/reliable-call';
 import { isVerified, enforceLimits } from '@/lib/abuse-guard';
 import { rateStore } from '@/lib/rate-store';
+import { getCachedOrTranslate } from '@/lib/cache';
+import { cacheStore } from '@/lib/cache-store';
 import { LIMITS, MODELS, serverKey } from '@/lib/config';
 import { TranslateRequestSchema, parseModelText, type SchemaBlock } from '@/lib/schema';
 import { validateImageBase64 } from '@/lib/validate-image';
@@ -90,7 +92,17 @@ export async function POST(req: NextRequest) {
       throw err;
     }
 
-    const { blocks, truncated, parseFailed } = await translateOnce(imageBase64, pageNum, provider, apiKey);
+    // BYOK requests may be confidential — never cache or serve cached results for them.
+    const { value, cached } = await getCachedOrTranslate(
+      cacheStore,
+      { imageBase64, provider: parsed.data.provider, model: MODELS[parsed.data.provider].default },
+      () => translateOnce(imageBase64, parsed.data.pageNum, parsed.data.provider, apiKey),
+      {
+        bypass: isByok,
+        shouldCache: (v) => !v.truncated && !v.parseFailed && v.blocks.length > 0,
+      },
+    );
+    const { blocks, truncated, parseFailed } = value;
 
     log('success', {
       requestId,
@@ -99,6 +111,7 @@ export async function POST(req: NextRequest) {
       model: MODELS[provider].default,
       truncated,
       parseFailed,
+      cached,
       blockCount: blocks.length,
       durationMs: Date.now() - startedAt,
     });

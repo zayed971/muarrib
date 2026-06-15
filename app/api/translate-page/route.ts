@@ -7,6 +7,8 @@ import { isVerified, enforceLimits } from '@/lib/abuse-guard';
 import { rateStore } from '@/lib/rate-store';
 import { getCachedOrTranslate } from '@/lib/cache';
 import { cacheStore } from '@/lib/cache-store';
+import { recordTranslation, recordError } from '@/lib/metrics';
+import { metricsStore } from '@/lib/metrics-store';
 import { LIMITS, MODELS, serverKey } from '@/lib/config';
 import { TranslateRequestSchema, parseModelText, type SchemaBlock } from '@/lib/schema';
 import { validateImageBase64 } from '@/lib/validate-image';
@@ -104,6 +106,12 @@ export async function POST(req: NextRequest) {
     );
     const { blocks, truncated, parseFailed } = value;
 
+    try {
+      await recordTranslation(metricsStore, { provider: parsed.data.provider, model: MODELS[parsed.data.provider].default, cached });
+    } catch {
+      // metrics are best-effort — never fail a translation over them
+    }
+
     log('success', {
       requestId,
       provider,
@@ -119,6 +127,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ blocks, truncated, parseFailed });
   } catch (err) {
     const { status, body } = toApiError(err);
+
+    try {
+      await recordError(metricsStore, body.code);
+    } catch {
+      // metrics are best-effort — never fail a translation over them
+    }
+
     log('error', {
       requestId,
       provider,

@@ -16,7 +16,7 @@ Muʿarrib sidesteps it by never extracting text from the PDF at all. Each page i
 
 ## Live demo
 
-Not yet deployed — see [Known limitations](#known-limitations).
+**https://muarrib.vercel.app** — deployed, but translation is not yet functional there: the Anthropic key and Cloudflare Turnstile keys haven't been configured in the production environment yet. The UI loads and is real; uploading a PDF will currently fail past the verification/translate step. This will be updated once that's wired up.
 
 ## Quickstart
 
@@ -49,7 +49,7 @@ Open `http://localhost:3000`. Verified from a clean clone: `npm install` → `np
 
 ## Known limitations
 
-- **Not deployed yet.** No live URL exists at the moment — Vercel project linkage exists (`.vercel/repo.json`) but no production deployment has been made.
+- **Deployed, but not yet configured.** https://muarrib.vercel.app is live (auto-deployed via the Vercel↔GitHub integration), but production env vars (`ANTHROPIC_API_KEY`, Turnstile keys, etc.) aren't set yet, so translation doesn't work there yet — only local dev with a `.env` does.
 - **Test coverage is at the logic layer, not integration.** `npm test` covers the four pure/mockable modules that matter most for correctness (`number-guard`, `reliable-call`, `abuse-guard`, `turnstile`) — 47 tests, all passing. The Next.js route handlers themselves (`app/api/*/route.ts`) and the provider adapters (`lib/providers/*.ts`) have no tests yet. There's also no CI configured to run `npm test` automatically on push.
 - **60-second function timeout on Vercel's Hobby plan** (`export const maxDuration = 60` on the translate route). A dense page that triggers a split (two half-page calls) plus a Gemini 429 retry can approach that ceiling. Fine on the default Anthropic path in practice; worth watching under Gemini BYOK on hostile input.
 - **In-memory fallback is single-instance only.** Without Upstash Redis configured, rate limits and the daily-verification flag reset per serverless instance — fine for local dev, not safe for a real multi-instance production deploy.

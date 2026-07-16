@@ -1,4 +1,4 @@
-// Copied verbatim from muarrib.html buildPrompt() — do not modify without testing.
+// Ported from the original single-file HTML prototype's buildPrompt() — do not modify without testing.
 export function buildPrompt(pageNum: number): string {
   return (
 "You are an expert English→Arabic scientific and medical translator and document-layout analyst. The image is page " + pageNum + " of an English document.\n\n" +
